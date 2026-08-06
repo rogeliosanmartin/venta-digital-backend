@@ -10,7 +10,7 @@ import { User } from './user.entity';
 import { Permission } from './permission.entity';
 
 /** Relación N:M entre usuario y permiso. */
-@Entity({ name: 'vd_user_permissions' })
+@Entity({ name: 'user_permissions' })
 @Unique(['user', 'permission'])
 export class UserPermission {
   @PrimaryGeneratedColumn()

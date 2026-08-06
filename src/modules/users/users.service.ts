@@ -360,7 +360,7 @@ export class UsersService implements OnModuleInit {
       );
     }
 
-    // Respaldo: unicidad global de columna cellphone en vd_users
+    // Respaldo: unicidad global de columna cellphone en users
     const anyUser =
       excludeId != null
         ? await this.usersRepository.findByCellphoneExcludingId(

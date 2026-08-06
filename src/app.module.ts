@@ -11,6 +11,11 @@ import { UserPermission } from './modules/users/entities/user-permission.entity'
 import { RefreshToken } from './modules/users/entities/refresh-token.entity';
 import { AuditModule } from './modules/audit/audit.module';
 import { AuditLog } from './modules/audit/entities/audit-log.entity';
+import { Sale } from './modules/sales/entities/sale.entity';
+import { SaleHolder } from './modules/sales/entities/sale-holder.entity';
+import { SaleSecondContact } from './modules/sales/entities/sale-second-contact.entity';
+import { SaleBeneficiary } from './modules/sales/entities/sale-beneficiary.entity';
+import { SaleDocument } from './modules/sales/entities/sale-document.entity';
 
 @Module({
   imports: [
@@ -28,8 +33,19 @@ import { AuditLog } from './modules/audit/entities/audit-log.entity';
         username: config.get<string>('DB_USR'),
         password: config.get<string>('DB_PSW'),
         database: config.get<string>('DB_NAME'),
-        entities: [User, Permission, UserPermission, RefreshToken, AuditLog],
-        // Solo sincroniza entidades `vd_*`. No toca tablas ajenas de Odoo.
+        entities: [
+          User,
+          Permission,
+          UserPermission,
+          RefreshToken,
+          AuditLog,
+          Sale,
+          SaleHolder,
+          SaleSecondContact,
+          SaleBeneficiary,
+          SaleDocument,
+        ],
+        // Solo beta: crea/ajusta esquema de esta BD. No usar en producción.
         synchronize: config.get<string>('DB_SYNC') === 'true',
         // Activar solo para depurar: DB_LOGGING=true
         logging: config.get<string>('DB_LOGGING') === 'true',

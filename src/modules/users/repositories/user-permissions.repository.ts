@@ -5,7 +5,7 @@ import { UserPermission } from '../entities/user-permission.entity';
 import { User } from '../entities/user.entity';
 import { Permission } from '../entities/permission.entity';
 
-/** Consultas a `vd_user_permissions`. Sin lógica de negocio. */
+/** Consultas a `user_permissions`. Sin lógica de negocio. */
 @Injectable()
 export class UserPermissionsRepository {
   constructor(

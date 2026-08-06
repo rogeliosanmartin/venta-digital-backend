@@ -3,7 +3,7 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { In, Repository } from 'typeorm';
 import { Permission } from '../entities/permission.entity';
 
-/** Consultas a `vd_permissions`. Sin lógica de negocio. */
+/** Consultas a `permissions`. Sin lógica de negocio. */
 @Injectable()
 export class PermissionsRepository {
   constructor(

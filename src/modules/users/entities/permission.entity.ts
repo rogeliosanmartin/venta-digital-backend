@@ -2,7 +2,7 @@ import { Column, Entity, OneToMany, PrimaryGeneratedColumn } from 'typeorm';
 import { UserPermission } from './user-permission.entity';
 
 /** Catálogo de permisos del sistema (código estable + nombre legible). */
-@Entity({ name: 'vd_permissions' })
+@Entity({ name: 'permissions' })
 export class Permission {
   @PrimaryGeneratedColumn()
   id: number;

@@ -12,7 +12,7 @@ import { AuditEntityType } from '../enums/audit-entity-type.enum';
  * Bitácora de transacciones / auditoría.
  * Ejemplo: "Admin X dio de alta al vendedor Y" o "cambió el celular de A a B".
  */
-@Entity({ name: 'vd_audit_logs' })
+@Entity({ name: 'audit_logs' })
 export class AuditLog {
   @PrimaryGeneratedColumn()
   id: number;

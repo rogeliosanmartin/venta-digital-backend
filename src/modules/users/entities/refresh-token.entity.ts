@@ -12,7 +12,7 @@ import { User } from './user.entity';
  * Refresh tokens para MONITOR y ADMIN.
  * Los vendedores NO usan refresh: su sesión muere al fin del día.
  */
-@Entity({ name: 'vd_refresh_tokens' })
+@Entity({ name: 'refresh_tokens' })
 export class RefreshToken {
   @PrimaryGeneratedColumn()
   id: number;

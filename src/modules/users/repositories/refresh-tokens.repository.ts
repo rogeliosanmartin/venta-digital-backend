@@ -4,7 +4,7 @@ import { Repository } from 'typeorm';
 import { RefreshToken } from '../entities/refresh-token.entity';
 import { User } from '../entities/user.entity';
 
-/** Consultas a `vd_refresh_tokens`. Sin lógica de negocio. */
+/** Consultas a `refresh_tokens`. Sin lógica de negocio. */
 @Injectable()
 export class RefreshTokensRepository {
   constructor(

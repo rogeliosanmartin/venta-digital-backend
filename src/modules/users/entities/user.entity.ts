@@ -10,15 +10,14 @@ import { UserType } from '../../../common/enums/user-type.enum';
 import { UserPermission } from './user-permission.entity';
 
 /**
- * Usuario del sistema Venta Digital.
- * Prefijo de tabla `vd_` para no chocar con tablas de Odoo en la misma BD.
+ * Usuario del sistema Venta Digital (BD propia).
  *
  * - VENDEDOR: se autentica con celular + PIN WhatsApp (sin password).
  * - MONITOR / ADMIN: se autentican con usuario + contraseña (bcrypt).
  *
  * Todas las fechas se guardan en UTC (Date de TypeORM / PostgreSQL timestamptz).
  */
-@Entity({ name: 'vd_users' })
+@Entity({ name: 'users' })
 export class User {
   @PrimaryGeneratedColumn()
   id: number;

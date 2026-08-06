@@ -11,7 +11,7 @@ export interface AuditLogCreateInput {
   actorType: string | null;
   action: AuditAction;
   entityType: AuditEntityType;
-  entityId: number | null;
+  entityId: number | null; 
   summary: string;
   details?: Record<string, unknown> | null;
 }
@@ -30,7 +30,7 @@ export interface AuditLogListFilter {
   offset: number;
 }
 
-/** Consultas a `vd_audit_logs`. Sin lógica de negocio. */
+/** Consultas a `audit_logs`. Sin lógica de negocio. */
 @Injectable()
 export class AuditLogsRepository {
   constructor(

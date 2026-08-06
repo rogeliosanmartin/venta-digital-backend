@@ -4,7 +4,7 @@ import { Repository } from 'typeorm';
 import { User } from '../entities/user.entity';
 import { UserType } from '../../../common/enums/user-type.enum';
 
-/** Consultas a `vd_users`. Sin lógica de negocio. */
+/** Consultas a `users`. Sin lógica de negocio. */
 @Injectable()
 export class UsersRepository {
   constructor(
