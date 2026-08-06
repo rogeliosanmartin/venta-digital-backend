@@ -1,0 +1,23 @@
+import { Module } from '@nestjs/common';
+import { TypeOrmModule } from '@nestjs/typeorm';
+import { UsersService } from './users.service';
+import { UsersController } from './users.controller';
+import { User } from './entities/user.entity';
+import { Permission } from './entities/permission.entity';
+import { UserPermission } from './entities/user-permission.entity';
+import { RefreshToken } from './entities/refresh-token.entity';
+
+@Module({
+  imports: [
+    TypeOrmModule.forFeature([
+      User,
+      Permission,
+      UserPermission,
+      RefreshToken,
+    ]),
+  ],
+  controllers: [UsersController],
+  providers: [UsersService],
+  exports: [UsersService, TypeOrmModule],
+})
+export class UsersModule {}
