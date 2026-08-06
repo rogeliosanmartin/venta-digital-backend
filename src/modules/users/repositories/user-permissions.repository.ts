@@ -1,0 +1,19 @@
+import { Injectable } from '@nestjs/common';
+import { InjectRepository } from '@nestjs/typeorm';
+import { Repository } from 'typeorm';
+import { UserPermission } from '../entities/user-permission.entity';
+import { User } from '../entities/user.entity';
+import { Permission } from '../entities/permission.entity';
+
+/** Consultas a `vd_user_permissions`. Sin lógica de negocio. */
+@Injectable()
+export class UserPermissionsRepository {
+  constructor(
+    @InjectRepository(UserPermission)
+    private readonly repo: Repository<UserPermission>,
+  ) {}
+
+  assign(user: User, permission: Permission): Promise<UserPermission> {
+    return this.repo.save(this.repo.create({ user, permission }));
+  }
+}

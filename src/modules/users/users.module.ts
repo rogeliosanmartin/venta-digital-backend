@@ -6,6 +6,18 @@ import { User } from './entities/user.entity';
 import { Permission } from './entities/permission.entity';
 import { UserPermission } from './entities/user-permission.entity';
 import { RefreshToken } from './entities/refresh-token.entity';
+import { UsersRepository } from './repositories/users.repository';
+import { PermissionsRepository } from './repositories/permissions.repository';
+import { UserPermissionsRepository } from './repositories/user-permissions.repository';
+import { RefreshTokensRepository } from './repositories/refresh-tokens.repository';
+import { AuditModule } from '../audit/audit.module';
+
+const repositories = [
+  UsersRepository,
+  PermissionsRepository,
+  UserPermissionsRepository,
+  RefreshTokensRepository,
+];
 
 @Module({
   imports: [
@@ -15,9 +27,10 @@ import { RefreshToken } from './entities/refresh-token.entity';
       UserPermission,
       RefreshToken,
     ]),
+    AuditModule,
   ],
   controllers: [UsersController],
-  providers: [UsersService],
-  exports: [UsersService, TypeOrmModule],
+  providers: [UsersService, ...repositories],
+  exports: [UsersService, ...repositories],
 })
 export class UsersModule {}

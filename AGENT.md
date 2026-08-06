@@ -38,7 +38,10 @@ WhatsApp NIP: `API_WHATS` + endpoints `nip` / `nip/validate/:id` (mismo servicio
 ### Admin usuarios
 
 - `POST /api/users` (solo ADMIN + permiso `usuarios.gestionar`)
+- `PATCH /api/users/:id` — editar nombre / celular o username / password opcional
+- `PATCH /api/users/:id/active` `{ active }` — habilitar/deshabilitar (no auto-desactivarse ni dejar sin admin activo)
 - Tipos: `VENDEDOR` | `MONITOR` | `ADMIN`
+- Celular WhatsApp de vendedor: **único** (no se repite entre vendedores, aunque estén inactivos)
 - Permisos default:
   - MONITOR → `dashboard.ver`, `ventas.ver`, `reportes.ver`
   - ADMIN → los anteriores + `usuarios.gestionar`
@@ -51,15 +54,48 @@ WhatsApp NIP: `API_WHATS` + endpoints `nip` / `nip/validate/:id` (mismo servicio
 src/
   common/          # enums, guards, decorators, utils
   modules/
-    auth/          # login / tokens
-    users/         # entidades + alta/listado
+    auth/          # login / tokens (service procesa)
+    users/         # entidades + repositories + service
+      entities/
+      repositories/  # SOLO consultas a BD
+    audit/         # bitácora de transacciones (vd_audit_logs)
     whatsapp/      # cliente NIP externo
-    sales/         # placeholder ventas propias
+    sales/
+      repositories/  # consultas de ventas
 ```
 
-- Controllers delgados; lógica en services.
+Capas por dominio:
+
+1. **Controller** — HTTP, delgado
+2. **Service** — reglas de negocio y transformación de datos consultados
+3. **Repository** (`*.repository.ts`) — **únicas** consultas/persistencia TypeORM
+
 - Un módulo = un dominio.
+- Services **no** inyectan `Repository<T>` de TypeORM; usan la capa `*.repository`.
 - Nombres explícitos; comentarios de negocio donde el “por qué” no sea obvio.
+
+## Auditoría / log de transacciones
+
+Tabla `vd_audit_logs`. Cada operación relevante deja:
+
+- Quién (`actorUserId`, `actorName`, `actorType`)
+- Qué (`action`: CREATE | UPDATE | ACTIVATE | DEACTIVATE | DELETE)
+- Sobre qué (`entityType`: USER | SALE, `entityId`)
+- Resumen en español (`summary`)
+- Detalle JSON (`details`: `after` o `changes: { campo: { from, to } }`)
+- Fecha UTC (`createdAt`)
+
+- Alta/edición/activar usuarios ya registran log.
+- Ventas: al implementar persistencia, usar `AuditService.record` igual.
+- Consulta solo ADMIN: `GET /api/audit-logs`
+  - `dateFrom` / `dateTo` — YYYY-MM-DD (zona `America/Mexico_City`); front default = hoy
+  - `q` — palabra clave (summary, actor, acción, tipo, details JSON)
+  - `actorUserId` — usuario que realizó la acción
+  - `action` — CREATE | UPDATE | ACTIVATE | DEACTIVATE | DELETE
+  - `entityType`, `entityId`, `limit`, `offset`
+- Front: `/admin/bitacora` (menú Bitácora, solo ADMIN)
+- PDF: se genera en el **front** (`jspdf`) con los mismos filtros; pide listado con `limit` hasta 2000
+- No guardar passwords ni hashes en `details`.
 
 ## Historial ANA
 

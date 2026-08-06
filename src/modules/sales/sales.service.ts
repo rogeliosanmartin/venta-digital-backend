@@ -1,24 +1,20 @@
 import { Injectable } from '@nestjs/common';
-
-export interface SaleListItem {
-  id: number;
-  sellerId: number;
-  sellerName: string;
-  amount: number;
-  createdAt: string; // UTC ISO
-}
+import { SalesRepository } from './repositories/sales.repository';
 
 /**
  * Ventas.
  * - Vendedor: solo las propias.
  * - Monitor/Admin (permiso ventas.ver): todas las de los vendedores.
  *
- * Por ahora el listado está vacío; la persistencia se agregará después.
+ * El repository consulta; aquí se arma la respuesta de negocio.
+ * Al persistir altas/ediciones, registrar con AuditService (entityType SALE).
  */
 @Injectable()
 export class SalesService {
+  constructor(private readonly salesRepository: SalesRepository) {}
+
   async listOwnSales(sellerId: number) {
-    const items = await this.findSales({ sellerId });
+    const items = await this.salesRepository.findBySellerId(sellerId);
     return {
       scope: 'own' as const,
       items,
@@ -35,7 +31,7 @@ export class SalesService {
    * Pensado para MONITOR y ADMIN con permiso `ventas.ver`.
    */
   async listAllSales() {
-    const items = await this.findSales({});
+    const items = await this.salesRepository.findAll();
     return {
       scope: 'all' as const,
       items,
@@ -45,15 +41,5 @@ export class SalesService {
           ? 'Aún no hay ventas registradas de vendedores'
           : 'Ventas de todos los vendedores',
     };
-  }
-
-  /**
-   * Punto único de consulta. Cuando exista la entidad/tabla de ventas,
-   * aquí se filtra por sellerId (propias) o sin filtro (todas).
-   */
-  private async findSales(_filter: {
-    sellerId?: number;
-  }): Promise<SaleListItem[]> {
-    return [];
   }
 }

@@ -9,6 +9,8 @@ import { User } from './modules/users/entities/user.entity';
 import { Permission } from './modules/users/entities/permission.entity';
 import { UserPermission } from './modules/users/entities/user-permission.entity';
 import { RefreshToken } from './modules/users/entities/refresh-token.entity';
+import { AuditModule } from './modules/audit/audit.module';
+import { AuditLog } from './modules/audit/entities/audit-log.entity';
 
 @Module({
   imports: [
@@ -26,7 +28,7 @@ import { RefreshToken } from './modules/users/entities/refresh-token.entity';
         username: config.get<string>('DB_USR'),
         password: config.get<string>('DB_PSW'),
         database: config.get<string>('DB_NAME'),
-        entities: [User, Permission, UserPermission, RefreshToken],
+        entities: [User, Permission, UserPermission, RefreshToken, AuditLog],
         // Solo sincroniza entidades `vd_*`. No toca tablas ajenas de Odoo.
         synchronize: config.get<string>('DB_SYNC') === 'true',
         // Activar solo para depurar: DB_LOGGING=true
@@ -37,6 +39,7 @@ import { RefreshToken } from './modules/users/entities/refresh-token.entity';
     UsersModule,
     SalesModule,
     WhatsappModule,
+    AuditModule,
   ],
 })
 export class AppModule {}

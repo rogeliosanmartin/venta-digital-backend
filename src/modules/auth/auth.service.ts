@@ -5,12 +5,9 @@ import {
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { JwtService } from '@nestjs/jwt';
-import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
 import * as bcrypt from 'bcrypt';
 import * as crypto from 'crypto';
 import { User } from '../users/entities/user.entity';
-import { RefreshToken } from '../users/entities/refresh-token.entity';
 import { WhatsappService } from '../whatsapp/whatsapp.service';
 import { UserType } from '../../common/enums/user-type.enum';
 import {
@@ -19,6 +16,8 @@ import {
 } from '../../common/utils/end-of-day.util';
 import { VerifySellerPinDto } from './dto/verify-seller-pin.dto';
 import { MonitorLoginDto } from './dto/monitor-login.dto';
+import { UsersRepository } from '../users/repositories/users.repository';
+import { RefreshTokensRepository } from '../users/repositories/refresh-tokens.repository';
 
 export interface SessionUserView {
   id: number;
@@ -37,10 +36,8 @@ export interface AuthTokensResponse {
 @Injectable()
 export class AuthService {
   constructor(
-    @InjectRepository(User)
-    private readonly usersRepo: Repository<User>,
-    @InjectRepository(RefreshToken)
-    private readonly refreshRepo: Repository<RefreshToken>,
+    private readonly usersRepository: UsersRepository,
+    private readonly refreshTokensRepository: RefreshTokensRepository,
     private readonly jwtService: JwtService,
     private readonly whatsapp: WhatsappService,
     private readonly config: ConfigService,
@@ -69,13 +66,8 @@ export class AuthService {
    * Paso 1 vendedor: valida celular activo y solicita PIN por WhatsApp.
    */
   async requestSellerPin(cellphone: string) {
-    const seller = await this.usersRepo.findOne({
-      where: {
-        cellphone,
-        type: UserType.VENDEDOR,
-        active: true,
-      },
-    });
+    const seller =
+      await this.usersRepository.findActiveSellerByCellphone(cellphone);
 
     if (!seller) {
       // Respuesta genérica para no filtrar existencia de números.
@@ -107,14 +99,10 @@ export class AuthService {
       throw new UnauthorizedException('PIN inválido o expirado');
     }
 
-    const seller = await this.usersRepo.findOne({
-      where: {
-        cellphone: dto.cellphone,
-        type: UserType.VENDEDOR,
-        active: true,
-      },
-      relations: { userPermissions: { permission: true } },
-    });
+    const seller =
+      await this.usersRepository.findActiveSellerByCellphoneWithPermissions(
+        dto.cellphone,
+      );
 
     if (!seller) {
       throw new UnauthorizedException('Vendedor no encontrado o inactivo');
@@ -145,10 +133,9 @@ export class AuthService {
    * Emite access + refresh para mantener la sesión activa.
    */
   async loginMonitor(dto: MonitorLoginDto): Promise<AuthTokensResponse> {
-    const user = await this.usersRepo.findOne({
-      where: { username: dto.username, active: true },
-      relations: { userPermissions: { permission: true } },
-    });
+    const user = await this.usersRepository.findActiveByUsernameWithPermissions(
+      dto.username,
+    );
 
     if (
       !user ||
@@ -182,12 +169,8 @@ export class AuthService {
     }
 
     const tokenHash = this.hashToken(refreshToken);
-    const stored = await this.refreshRepo.findOne({
-      where: { tokenHash },
-      relations: {
-        user: { userPermissions: { permission: true } },
-      },
-    });
+    const stored =
+      await this.refreshTokensRepository.findByHashWithUser(tokenHash);
 
     if (
       !stored ||
@@ -199,7 +182,7 @@ export class AuthService {
     }
 
     stored.revokedAt = new Date();
-    await this.refreshRepo.save(stored);
+    await this.refreshTokensRepository.save(stored);
 
     return this.issueMonitorTokens(stored.user);
   }
@@ -210,20 +193,18 @@ export class AuthService {
     }
 
     const tokenHash = this.hashToken(refreshToken);
-    const stored = await this.refreshRepo.findOne({ where: { tokenHash } });
+    const stored = await this.refreshTokensRepository.findByHash(tokenHash);
     if (stored && !stored.revokedAt) {
       stored.revokedAt = new Date();
-      await this.refreshRepo.save(stored);
+      await this.refreshTokensRepository.save(stored);
     }
 
     return { message: 'Sesión cerrada' };
   }
 
   async me(userId: number): Promise<SessionUserView> {
-    const user = await this.usersRepo.findOne({
-      where: { id: userId, active: true },
-      relations: { userPermissions: { permission: true } },
-    });
+    const user =
+      await this.usersRepository.findActiveByIdWithPermissions(userId);
 
     if (!user) {
       throw new UnauthorizedException('Usuario no encontrado');
@@ -262,14 +243,12 @@ export class AuthService {
     const expiresAt = this.computeExpiresAt(accessExpires);
     const refreshExpiresAt = this.computeExpiresAt(refreshExpires);
 
-    await this.refreshRepo.save(
-      this.refreshRepo.create({
-        user,
-        tokenHash: this.hashToken(refreshToken),
-        expiresAt: refreshExpiresAt,
-        revokedAt: null,
-      }),
-    );
+    await this.refreshTokensRepository.createAndSave({
+      user,
+      tokenHash: this.hashToken(refreshToken),
+      expiresAt: refreshExpiresAt,
+      revokedAt: null,
+    });
 
     return {
       accessToken,

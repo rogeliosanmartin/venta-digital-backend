@@ -29,7 +29,10 @@ export class User {
   @Column({ name: 'full_name', type: 'varchar', length: 150 })
   fullName: string;
 
-  /** Celular a 10 dígitos. Obligatorio para VENDEDOR. */
+  /**
+   * Celular WhatsApp a 10 dígitos. Obligatorio para VENDEDOR.
+   * Unique en BD: no puede repetirse entre vendedores.
+   */
   @Column({ type: 'varchar', length: 10, nullable: true, unique: true })
   cellphone: string | null;
 
