@@ -31,6 +31,13 @@ export class SaleDocument {
   @Column({ type: 'varchar', length: 120, default: 'application/octet-stream' })
   mime!: string;
 
-  @Column({ name: 'data_base64', type: 'text' })
-  dataBase64!: string;
+  /** Binario temporal hasta subida exitosa a Drive. */
+  @Column({ name: 'data_base64', type: 'text', nullable: true })
+  dataBase64!: string | null;
+
+  @Column({ name: 'drive_file_id', type: 'varchar', length: 80, nullable: true })
+  driveFileId!: string | null;
+
+  @Column({ name: 'drive_file_url', type: 'varchar', length: 320, nullable: true })
+  driveFileUrl!: string | null;
 }

@@ -2,4 +2,5 @@ export enum DocumentKind {
   INE = 'INE',
   COMPROBANTE = 'COMPROBANTE',
   FIRMA = 'FIRMA',
+  TICKET_PAGO = 'TICKET_PAGO',
 }

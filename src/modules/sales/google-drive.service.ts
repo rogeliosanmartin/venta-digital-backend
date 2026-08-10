@@ -244,20 +244,87 @@ export class GoogleDriveService {
     }
   }
 
-  private async createSaleFolder(saleId: number, titularName: string | null) {
-    if (!this.drive || !this.folderId) {
-      throw new Error('Drive no configurado');
-    }
-    const safe = (titularName || 'Sin titular')
-      .replace(/[\\/:*?"<>|]/g, '-')
+  private sanitizeDriveName(value: string, max = 80): string {
+    return value
+      .normalize('NFD')
+      .replace(/[\u0300-\u036f]/g, '')
+      .replace(/[\\/:*?"<>|]+/g, '-')
+      .replace(/\s+/g, ' ')
       .trim()
-      .slice(0, 80);
-    const name = `Venta-${saleId}_${safe}`;
+      .slice(0, max) || 'Sin-nombre';
+  }
+
+  private static readonly MONTH_LABELS = [
+    'enero',
+    'febrero',
+    'marzo',
+    'abril',
+    'mayo',
+    'junio',
+    'julio',
+    'agosto',
+    'septiembre',
+    'octubre',
+    'noviembre',
+    'diciembre',
+  ] as const;
+
+  /** Año/mes en zona de negocio. Mes: `01-enero`. */
+  private resolveYearMonth(fecha?: string | null): { year: string; month: string } {
+    const tz =
+      this.config.get<string>('BUSINESS_TIMEZONE')?.trim() ||
+      'America/Mexico_City';
+    const fromFecha = fecha?.trim()?.slice(0, 10);
+    let date: Date;
+    if (fromFecha && /^\d{4}-\d{2}-\d{2}$/.test(fromFecha)) {
+      date = new Date(`${fromFecha}T12:00:00`);
+    } else {
+      date = new Date();
+    }
+    const parts = new Intl.DateTimeFormat('en-CA', {
+      timeZone: tz,
+      year: 'numeric',
+      month: '2-digit',
+    }).formatToParts(date);
+    const year = parts.find((p) => p.type === 'year')?.value ?? '0000';
+    const monthNum = parts.find((p) => p.type === 'month')?.value ?? '01';
+    const idx = Math.max(0, Math.min(11, Number(monthNum) - 1));
+    const month = `${monthNum}-${GoogleDriveService.MONTH_LABELS[idx]}`;
+    return { year, month };
+  }
+
+  private async findChildFolder(
+    parentId: string,
+    name: string,
+  ): Promise<string | null> {
+    if (!this.drive) return null;
+    const escaped = name.replace(/\\/g, '\\\\').replace(/'/g, "\\'");
+    const res = await this.drive.files.list({
+      q: [
+        `'${parentId}' in parents`,
+        `name = '${escaped}'`,
+        `mimeType = 'application/vnd.google-apps.folder'`,
+        'trashed = false',
+      ].join(' and '),
+      fields: 'files(id, name)',
+      pageSize: 1,
+      supportsAllDrives: true,
+      includeItemsFromAllDrives: true,
+    });
+    return res.data.files?.[0]?.id ?? null;
+  }
+
+  private async findOrCreateFolder(parentId: string, name: string) {
+    if (!this.drive) throw new Error('Drive no configurado');
+    const existing = await this.findChildFolder(parentId, name);
+    if (existing) {
+      return { id: existing, name, webViewLink: null as string | null };
+    }
     const res = await this.drive.files.create({
       requestBody: {
         name,
         mimeType: 'application/vnd.google-apps.folder',
-        parents: [this.folderId],
+        parents: [parentId],
       },
       fields: 'id, name, webViewLink',
       supportsAllDrives: true,
@@ -266,6 +333,40 @@ export class GoogleDriveService {
       id: res.data.id!,
       name: res.data.name ?? name,
       webViewLink: res.data.webViewLink ?? null,
+    };
+  }
+
+  /**
+   * Ruta: raíz → AÑO → MES → FOLIO-nombrecliente
+   */
+  private async createSaleFolder(params: {
+    folio: number | string;
+    titularName: string | null;
+    fecha?: string | null;
+  }) {
+    if (!this.drive || !this.folderId) {
+      throw new Error('Drive no configurado');
+    }
+    const { year, month } = this.resolveYearMonth(params.fecha);
+    const client = this.sanitizeDriveName(params.titularName || 'Sin titular');
+    const saleFolderName = `${params.folio}-${client}`;
+
+    const yearFolder = await this.findOrCreateFolder(this.folderId, year);
+    const monthFolder = await this.findOrCreateFolder(yearFolder.id, month);
+    const saleFolder = await this.findOrCreateFolder(
+      monthFolder.id,
+      saleFolderName,
+    );
+
+    // webViewLink solo viene al crear; si reutiliza carpeta, armar URL
+    const webViewLink =
+      saleFolder.webViewLink ||
+      `https://drive.google.com/drive/folders/${saleFolder.id}`;
+
+    return {
+      id: saleFolder.id,
+      name: `${year}/${month}/${saleFolderName}`,
+      webViewLink,
     };
   }
 
@@ -297,11 +398,13 @@ export class GoogleDriveService {
 
   /**
    * Crea carpeta por venta y sube INE, comprobante, firma y carátula PDF.
-   * No falla el envío de venta si Drive falla (se registra en log).
+   * El caller (signSale) falla el flujo si esta subida no es exitosa.
    */
   async uploadSaleDocuments(params: {
     saleId: number;
     titularName: string | null;
+    /** Fecha del contrato (YYYY-MM-DD); define carpeta AÑO/MES. */
+    fecha?: string | null;
     documentos: Record<string, unknown>;
     /** Vista previa del contrato generada en el front (opcional). */
     caratulaPdf?: DriveAttachment | null;
@@ -313,8 +416,13 @@ export class GoogleDriveService {
   } | null> {
     if (!this.isEnabled()) return null;
 
-    const { saleId, titularName, documentos, caratulaPdf } = params;
-    const folder = await this.createSaleFolder(saleId, titularName);
+    const { saleId, titularName, fecha, documentos, caratulaPdf } = params;
+    const folio = String(saleId);
+    const folder = await this.createSaleFolder({
+      folio,
+      titularName,
+      fecha,
+    });
     const files: {
       key: string;
       id: string;
@@ -324,8 +432,9 @@ export class GoogleDriveService {
 
     const entries: { key: string; label: string }[] = [
       { key: 'ine', label: 'INE' },
-      { key: 'comprobanteDomicilio', label: 'Comprobante-domicilio' },
-      { key: 'firmaCliente', label: 'Firma-cliente' },
+      { key: 'comprobanteDomicilio', label: 'Comprobante' },
+      { key: 'ticketPago', label: 'Ticket' },
+      { key: 'firmaCliente', label: 'Firma' },
     ];
 
     for (const { key, label } of entries) {
@@ -342,7 +451,7 @@ export class GoogleDriveService {
             : att.name?.split('.').pop() || 'bin';
       const uploaded = await this.uploadBuffer(
         folder.id,
-        `${label}_venta-${saleId}.${ext}`,
+        `${folio}-${label}.${ext}`,
         att.mime || 'application/octet-stream',
         buffer,
       );
@@ -359,7 +468,7 @@ export class GoogleDriveService {
       if (buffer) {
         const uploaded = await this.uploadBuffer(
           folder.id,
-          `Caratula-contrato_venta-${saleId}.pdf`,
+          `${folio}-Caratula.pdf`,
           caratulaPdf.mime || 'application/pdf',
           buffer,
         );
@@ -373,7 +482,7 @@ export class GoogleDriveService {
     }
 
     this.logger.log(
-      `Drive: venta #${saleId} → carpeta ${folder.name} (${files.length} archivos) [${this.authMode}]`,
+      `Drive: venta #${saleId} → ${folder.name} (${files.length} archivos) [${this.authMode}]`,
     );
 
     return {
@@ -392,5 +501,37 @@ export class GoogleDriveService {
       throw new Error('Drive no habilitado o sin token OAuth');
     }
     return this.uploadBuffer(this.folderId, fileName, mime, buffer);
+  }
+
+  /** Descarga un archivo de Drive como base64 (p. ej. firma para vista previa). */
+  async downloadFileBase64(
+    fileId: string,
+  ): Promise<{ mime: string; dataBase64: string } | null> {
+    if (!this.drive || !fileId?.trim()) return null;
+    try {
+      const meta = await this.drive.files.get({
+        fileId,
+        fields: 'id, mimeType',
+        supportsAllDrives: true,
+      });
+      const res = await this.drive.files.get(
+        {
+          fileId,
+          alt: 'media',
+          supportsAllDrives: true,
+        },
+        { responseType: 'arraybuffer' },
+      );
+      const buffer = Buffer.from(res.data as ArrayBuffer);
+      return {
+        mime: meta.data.mimeType || 'application/octet-stream',
+        dataBase64: buffer.toString('base64'),
+      };
+    } catch (e) {
+      this.logger.warn(
+        `Drive download ${fileId}: ${(e as Error).message}`,
+      );
+      return null;
+    }
   }
 }

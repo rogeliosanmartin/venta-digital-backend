@@ -11,6 +11,24 @@ function s(v: unknown, fallback = ''): string {
   return v == null ? fallback : String(v).trim();
 }
 
+function money(v: unknown): number {
+  const n = Number(String(v ?? '').replace(/,/g, '').replace(/[^0-9.-]/g, ''));
+  return Number.isFinite(n) ? n : 0;
+}
+
+/** Saldo = precio − (precio × % descuento) − anticipo (≥ 0). */
+export function computeSaldo(
+  precioPlan: unknown,
+  descuentoPct: unknown,
+  anticipo: unknown,
+): string {
+  const precio = money(precioPlan);
+  const pct = Math.min(100, Math.max(0, money(descuentoPct)));
+  const descuentoMonto = (precio * pct) / 100;
+  const saldo = Math.max(0, precio - descuentoMonto - money(anticipo));
+  return String(Number(saldo.toFixed(2)));
+}
+
 function dateOrNull(v: unknown): string | null {
   const t = s(v);
   if (!t) return null;
@@ -37,10 +55,12 @@ export function saleToPublic(sale: Sale) {
     status: sale.status,
     amount: Number(sale.amount) || 0,
     titularName: sale.titularName,
+    odooPartnerId: sale.odooPartnerId ?? null,
     draftExpiresAt: sale.draftExpiresAt?.toISOString() ?? null,
     createdAt: sale.createdAt.toISOString(),
     updatedAt: sale.updatedAt.toISOString(),
     driveFolderUrl: sale.driveFolderUrl,
+    driveFolderPath: sale.driveFolderPath,
     payload: saleToPayload(sale),
   };
 }
@@ -54,9 +74,14 @@ export function saleToPayload(sale: Sale): Record<string, unknown> {
   const docs = sale.documents ?? [];
   const findDoc = (kind: DocumentKind) => {
     const d = docs.find((x) => x.kind === kind);
-    return d
-      ? { name: d.name, mime: d.mime, dataBase64: d.dataBase64 }
-      : null;
+    if (!d) return null;
+    return {
+      name: d.name,
+      mime: d.mime,
+      dataBase64: d.dataBase64 ?? '',
+      driveFileId: d.driveFileId ?? null,
+      driveFileUrl: d.driveFileUrl ?? null,
+    };
   };
 
   return {
@@ -64,7 +89,7 @@ export function saleToPayload(sale: Sale): Record<string, unknown> {
       fecha: sale.fecha ?? '',
       contrato: sale.contrato,
       origenVenta: sale.origenVenta,
-      folioSolicitud: sale.folioSolicitud,
+      folioSolicitud: sale.folioSolicitud || String(sale.id),
       fechaServicio: sale.fechaServicio ?? '',
       estatus: sale.estatus,
       anterior: sale.anterior,
@@ -155,6 +180,9 @@ export function saleToPayload(sale: Sale): Record<string, unknown> {
     ubicacionPlan: {
       planKind: sale.planKind,
       nombrePlan: sale.nombrePlan,
+      productId: sale.productId,
+      productDefaultCode: sale.productDefaultCode,
+      precioPlan: sale.precioPlan,
       seccion: sale.seccion,
       cuadrante: sale.cuadrante,
       numero: sale.numero,
@@ -187,6 +215,7 @@ export function saleToPayload(sale: Sale): Record<string, unknown> {
       ine: findDoc(DocumentKind.INE),
       comprobanteDomicilio: findDoc(DocumentKind.COMPROBANTE),
       firmaCliente: findDoc(DocumentKind.FIRMA),
+      ticketPago: findDoc(DocumentKind.TICKET_PAGO),
     },
   };
 }
@@ -220,6 +249,10 @@ export function saleToAuditSnapshot(sale: Sale): Record<string, unknown> {
   if (docs.some((d) => d.kind === DocumentKind.FIRMA)) {
     docLabels.push('Firma');
   }
+  if (docs.some((d) => d.kind === DocumentKind.TICKET_PAGO)) {
+    docLabels.push('Ticket de pago');
+  }
+  const docsOnDrive = docs.filter((d) => d.driveFileId).length;
 
   const snap: Record<string, unknown> = {
     sellerName: sale.sellerName,
@@ -229,7 +262,7 @@ export function saleToAuditSnapshot(sale: Sale): Record<string, unknown> {
     fecha: sale.fecha ?? '',
     contrato: sale.contrato,
     origenVenta: sale.origenVenta,
-    folioSolicitud: sale.folioSolicitud,
+    folioSolicitud: sale.folioSolicitud || String(sale.id),
     curp: h?.curp ?? '',
     celular: h?.celular1 ?? '',
     correo: h?.correo ?? '',
@@ -237,6 +270,7 @@ export function saleToAuditSnapshot(sale: Sale): Record<string, unknown> {
     estado: h?.estado ?? '',
     planKind: sale.planKind,
     nombrePlan: sale.nombrePlan,
+    productId: sale.productId,
     servicioFunerario: sale.servicioFunerario,
     beneficiario1: bens[0] ? fullName(bens[0]) : '',
     beneficiario1Parentesco: bens[0]?.parentesco ?? '',
@@ -250,7 +284,7 @@ export function saleToAuditSnapshot(sale: Sale): Record<string, unknown> {
     snap.seccion = sale.seccion;
     snap.cuadrante = sale.cuadrante;
     snap.numero = sale.numero;
-    snap.preasignacion = sale.preasignacion;
+    snap.preasignacion = sale.preasignacion ? 'Sí' : 'No';
   }
 
   if (sale.precioPlan || sale.formaPago || sale.anticipo) {
@@ -271,6 +305,12 @@ export function saleToAuditSnapshot(sale: Sale): Record<string, unknown> {
   if (sale.driveFolderUrl) {
     snap.driveFolderUrl = sale.driveFolderUrl;
   }
+  if (sale.driveFolderPath) {
+    snap.driveFolderPath = sale.driveFolderPath;
+  }
+  if (docsOnDrive > 0) {
+    snap.documentosEnDrive = docsOnDrive;
+  }
 
   // Quitar vacíos para no saturar la bitácora
   for (const key of Object.keys(snap)) {
@@ -289,7 +329,7 @@ export function applyPayloadToSale(sale: Sale, payload: SaleFormPayloadDto) {
   sale.fecha = dateOrNull(meta.fecha);
   sale.contrato = s(meta.contrato);
   sale.origenVenta = s(meta.origenVenta);
-  sale.folioSolicitud = s(meta.folioSolicitud);
+  // folioSolicitud: lo asigna el servidor (= id de venta)
   sale.fechaServicio = dateOrNull(meta.fechaServicio);
   sale.estatus = s(meta.estatus, 'ACTIVO');
   sale.anterior = s(meta.anterior);
@@ -299,31 +339,46 @@ export function applyPayloadToSale(sale: Sale, payload: SaleFormPayloadDto) {
   sale.planKind =
     kind === PlanKind.PARQUE ? PlanKind.PARQUE : PlanKind.PLAN_FUTURO;
   sale.nombrePlan = s(plan.nombrePlan);
+  const pid = plan.productId;
+  sale.productId =
+    pid == null || pid === ('' as any) || Number.isNaN(Number(pid))
+      ? null
+      : Number(pid);
+  sale.productDefaultCode = s(plan.productDefaultCode);
+  if (s(plan.precioPlan)) {
+    sale.precioPlan = s(plan.precioPlan);
+  }
   sale.servicioFunerario = s(plan.servicioFunerario);
-  if (sale.planKind === PlanKind.PARQUE) {
+  const preasig = Boolean(plan.preasignacion);
+  sale.preasignacion = sale.planKind === PlanKind.PARQUE && preasig;
+  if (sale.preasignacion) {
     sale.seccion = s(plan.seccion);
     sale.cuadrante = s(plan.cuadrante);
     sale.numero = s(plan.numero);
     sale.parqueFuneral = s(plan.parqueFuneral);
-    sale.preasignacion = s(plan.preasignacion, 'N/A');
   } else {
     sale.seccion = '';
     sale.cuadrante = '';
     sale.numero = '';
     sale.parqueFuneral = '';
-    sale.preasignacion = 'N/A';
   }
 
-  // Pago solo se aplica si viene (paso aparte); no borrar si el payload de captura lo omite
+  // Pago: en captura ya vienen anticipo/importes; no pisar precio del plan con vacío
   if (payload.pago) {
-    sale.precioPlan = s(pago.precioPlan);
+    if (s(pago.precioPlan)) sale.precioPlan = s(pago.precioPlan);
     sale.frecuencia = s(pago.frecuencia);
-    sale.promocionDescuento = s(pago.promocionDescuento);
+    // `promocionDescuento` guarda el % de descuento (0–100)
+    const descRaw = s(pago.promocionDescuento);
+    sale.promocionDescuento = descRaw ? String(money(descRaw)) : '';
     sale.anticipo = s(pago.anticipo);
     sale.pagoInicial = s(pago.pagoInicial);
     sale.plazo = s(pago.plazo);
     sale.importeCadaPago = s(pago.importeCadaPago);
-    sale.saldo = s(pago.saldo);
+    sale.saldo = computeSaldo(
+      sale.precioPlan,
+      sale.promocionDescuento,
+      sale.anticipo,
+    );
     sale.fechaProximoPago = dateOrNull(pago.fechaProximoPago);
     sale.diasEspecificosPago = s(pago.diasEspecificosPago);
     sale.formaPago = s(pago.formaPago);
@@ -405,27 +460,41 @@ export function applyPayloadToSale(sale: Sale, payload: SaleFormPayloadDto) {
   sale.beneficiaries = beneficiaries;
 
   const docs: SaleDocument[] = [];
+  const existingByKind = new Map(
+    (sale.documents ?? []).map((d) => [d.kind, d] as const),
+  );
   const pushDoc = (
     kind: DocumentKind,
-    att: { name?: string; mime?: string; dataBase64?: string } | null | undefined,
+    att: {
+      name?: string;
+      mime?: string;
+      dataBase64?: string;
+      driveFileId?: string | null;
+      driveFileUrl?: string | null;
+    } | null | undefined,
   ) => {
-    if (!att?.dataBase64) return;
-    const d = new SaleDocument();
+    const prev = existingByKind.get(kind);
+    if (!att?.dataBase64) {
+      // Sin binario nuevo: conservar doc ya en Drive o pendiente
+      if (prev && (prev.dataBase64 || prev.driveFileId)) {
+        docs.push(prev);
+      }
+      return;
+    }
+    const d = prev ?? new SaleDocument();
     d.kind = kind;
     d.name = s(att.name, kind.toLowerCase());
     d.mime = s(att.mime, 'application/octet-stream');
     d.dataBase64 = att.dataBase64;
+    // Reemplazo local invalida refs previas de Drive
+    d.driveFileId = null;
+    d.driveFileUrl = null;
     docs.push(d);
   };
-  // conservar firma si el payload de captura no la manda
-  const existingFirma = sale.documents?.find((d) => d.kind === DocumentKind.FIRMA);
   pushDoc(DocumentKind.INE, payload.documentos?.ine);
   pushDoc(DocumentKind.COMPROBANTE, payload.documentos?.comprobanteDomicilio);
-  if (payload.documentos?.firmaCliente) {
-    pushDoc(DocumentKind.FIRMA, payload.documentos.firmaCliente);
-  } else if (existingFirma) {
-    docs.push(existingFirma);
-  }
+  pushDoc(DocumentKind.FIRMA, payload.documentos?.firmaCliente);
+  pushDoc(DocumentKind.TICKET_PAGO, payload.documentos?.ticketPago);
   sale.documents = docs;
 
   sale.titularName = fullName(h) || sale.titularName;

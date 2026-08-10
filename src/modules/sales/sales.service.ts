@@ -23,6 +23,7 @@ import {
 } from './dto/sale-form.dto';
 import {
   applyPayloadToSale,
+  computeSaldo,
   fullName,
   saleToAuditSnapshot,
   saleToPayload,
@@ -30,9 +31,8 @@ import {
 } from './mappers/sale.mapper';
 import { assertValidCurp } from './utils/curp';
 import { SaleDocument } from './entities/sale-document.entity';
-
-const MAX_DRAFTS = 3;
-const DRAFT_TTL_MS = 24 * 60 * 60 * 1000;
+import { SettingsService } from '../settings/settings.service';
+import { DiscountsService } from '../discounts/discounts.service';
 
 @Injectable()
 export class SalesService {
@@ -43,10 +43,50 @@ export class SalesService {
     private readonly usersRepository: UsersRepository,
     private readonly auditService: AuditService,
     private readonly googleDrive: GoogleDriveService,
+    private readonly settingsService: SettingsService,
+    private readonly discountsService: DiscountsService,
   ) {}
 
-  private draftExpiry(from = new Date()) {
-    return new Date(from.getTime() + DRAFT_TTL_MS);
+  private parseMoney(v: unknown): number {
+    const n = Number(String(v ?? '').replace(/,/g, '').replace(/[^0-9.-]/g, ''));
+    return Number.isFinite(n) ? n : 0;
+  }
+
+  /** Valida tope de descuento (%) del vendedor y recalcula saldo. */
+  private async assertDiscountAndSaldo(sale: Sale, userId: number) {
+    const descuento = this.parseMoney(sale.promocionDescuento);
+    if (descuento < 0) {
+      throw new BadRequestException('El descuento no puede ser negativo');
+    }
+    if (descuento > 100) {
+      throw new BadRequestException('El descuento no puede ser mayor a 100%');
+    }
+    const max = await this.settingsService.allowedDiscountMaxForUser(userId);
+    if (descuento > max + 0.001) {
+      throw new BadRequestException(
+        `El descuento no puede exceder ${max}%`,
+      );
+    }
+    sale.saldo = computeSaldo(
+      sale.precioPlan,
+      sale.promocionDescuento,
+      sale.anticipo,
+    );
+  }
+
+  /** Folio de solicitud = id de venta (consecutivo natural de la tabla). */
+  private async syncFolioSolicitud(saleId: number) {
+    const sale = await this.salesRepository.findById(saleId);
+    if (!sale) return;
+    const folio = String(saleId);
+    if (sale.folioSolicitud === folio) return;
+    sale.folioSolicitud = folio;
+    await this.salesRepository.save(sale);
+  }
+
+  private async draftExpiry(from = new Date()) {
+    const { draftTtlHours } = await this.settingsService.getDraftPolicy();
+    return new Date(from.getTime() + draftTtlHours * 60 * 60 * 1000);
   }
 
   private assertSellerOwns(sale: Sale, userId: number) {
@@ -96,6 +136,8 @@ export class SalesService {
     });
     const drafts = visible.filter((s) => s.status === SaleStatus.DRAFT);
     const pipeline = visible.filter((s) => s.status !== SaleStatus.DRAFT);
+    const { draftLimit, draftTtlHours } =
+      await this.settingsService.getDraftPolicy();
 
     return {
       scope: 'own' as const,
@@ -103,7 +145,8 @@ export class SalesService {
       drafts: drafts.map(saleToPublic),
       submitted: pipeline.map(saleToPublic),
       draftCount: drafts.length,
-      draftLimit: MAX_DRAFTS,
+      draftLimit,
+      draftTtlHours,
       total: visible.length,
       message:
         visible.length === 0
@@ -123,6 +166,37 @@ export class SalesService {
         items.length === 0
           ? 'Aún no hay ventas registradas de vendedores'
           : 'Ventas de todos los vendedores',
+    };
+  }
+
+  /**
+   * Listado liviano para conciliación Odoo (sin adjuntos/base64).
+   * Misma fuente que el monitor: pagos / firma / completadas.
+   */
+  async listForConciliation() {
+    await this.purgeExpired();
+    const items = await this.salesRepository.findCompleted();
+    return {
+      scope: 'conciliation' as const,
+      total: items.length,
+      items: items.map((s) => ({
+        id: s.id,
+        sellerId: s.sellerId,
+        sellerName: s.sellerName,
+        status: s.status,
+        titularName: s.titularName,
+        odooPartnerId: s.odooPartnerId ?? null,
+        contrato: s.contrato ?? '',
+        nombrePlan: s.nombrePlan ?? '',
+        productDefaultCode: s.productDefaultCode ?? '',
+        precioPlan: s.precioPlan ?? '',
+        promocionDescuento: s.promocionDescuento ?? '',
+        anticipo: s.anticipo ?? '',
+        saldo: s.saldo ?? '',
+        amount: Number(s.amount) || 0,
+        createdAt: s.createdAt.toISOString(),
+        updatedAt: s.updatedAt.toISOString(),
+      })),
     };
   }
 
@@ -147,6 +221,46 @@ export class SalesService {
       }));
   }
 
+  /**
+   * Si la firma ya no tiene base64 (ventas firmadas antes del fix),
+   * la recupera desde Drive para la vista previa del PDF.
+   */
+  private async hydrateFirmaForPreview(sale: Sale) {
+    const firma = (sale.documents ?? []).find(
+      (d) => d.kind === DocumentKind.FIRMA,
+    );
+    if (!firma || firma.dataBase64?.trim() || !firma.driveFileId) return;
+    if (!this.googleDrive.isEnabled()) return;
+
+    const downloaded = await this.googleDrive.downloadFileBase64(
+      firma.driveFileId,
+    );
+    if (!downloaded) return;
+
+    firma.dataBase64 = downloaded.dataBase64;
+    if (downloaded.mime) firma.mime = downloaded.mime;
+    await this.salesRepository.save(sale);
+  }
+
+  /** Recupera base64 de todos los adjuntos faltantes (p. ej. para Odoo). */
+  private async hydrateAllDocuments(sale: Sale) {
+    if (!this.googleDrive.isEnabled()) return;
+    let changed = false;
+    for (const doc of sale.documents ?? []) {
+      if (doc.dataBase64?.trim() || !doc.driveFileId) continue;
+      const downloaded = await this.googleDrive.downloadFileBase64(
+        doc.driveFileId,
+      );
+      if (!downloaded) continue;
+      doc.dataBase64 = downloaded.dataBase64;
+      if (downloaded.mime) doc.mime = downloaded.mime;
+      changed = true;
+    }
+    if (changed) {
+      await this.salesRepository.save(sale);
+    }
+  }
+
   async getOne(id: number, user: AuthUserPayload) {
     await this.purgeExpired();
     const sale = await this.salesRepository.findById(id);
@@ -163,16 +277,40 @@ export class SalesService {
       }
     }
 
+    await this.hydrateFirmaForPreview(sale);
     return saleToPublic(sale);
+  }
+
+  /** Detalle completo para Conciliación Odoo (payload + archivos). */
+  async getOneForOdoo(id: number) {
+    await this.purgeExpired();
+    const sale = await this.salesRepository.findById(id);
+    if (!sale) throw new NotFoundException('Venta no encontrada');
+    await this.hydrateAllDocuments(sale);
+    return saleToPublic(sale);
+  }
+
+  /** Asocia un res.partner de Odoo a la venta (Mesa de Control). */
+  async setOdooPartner(id: number, odooPartnerId: number) {
+    await this.purgeExpired();
+    const sale = await this.salesRepository.findById(id);
+    if (!sale) throw new NotFoundException('Venta no encontrada');
+    sale.odooPartnerId = odooPartnerId;
+    await this.salesRepository.save(sale);
+    return {
+      id: sale.id,
+      odooPartnerId: sale.odooPartnerId,
+    };
   }
 
   async createDraft(user: AuthUserPayload, dto: UpsertSaleDto) {
     await this.purgeExpired();
     const now = new Date();
+    const { draftLimit } = await this.settingsService.getDraftPolicy();
     const count = await this.salesRepository.countActiveDrafts(user.userId, now);
-    if (count >= MAX_DRAFTS) {
+    if (count >= draftLimit) {
       throw new BadRequestException(
-        `Solo puedes tener ${MAX_DRAFTS} borradores. Elimina o envía uno antes de crear otro.`,
+        `Solo puedes tener ${draftLimit} borradores. Elimina o envía uno antes de crear otro.`,
       );
     }
 
@@ -190,11 +328,13 @@ export class SalesService {
     sale.sellerName = seller?.fullName ?? 'Vendedor';
     sale.status = SaleStatus.DRAFT;
     sale.amount = '0';
-    sale.draftExpiresAt = this.draftExpiry(now);
+    sale.draftExpiresAt = await this.draftExpiry(now);
     applyPayloadToSale(sale, dto.payload);
+    await this.assertDiscountAndSaldo(sale, user.userId);
     if (dto.titularName?.trim()) sale.titularName = dto.titularName.trim();
 
     const saved = await this.salesRepository.save(sale);
+    await this.syncFolioSolicitud(saved.id);
     const full = (await this.salesRepository.findById(saved.id))!;
     const titular =
       full.titularName || (full.holder ? fullName(full.holder) : '') || 'sin titular';
@@ -236,8 +376,10 @@ export class SalesService {
     }
 
     applyPayloadToSale(sale, dto.payload);
+    await this.assertDiscountAndSaldo(sale, user.userId);
     if (dto.titularName?.trim()) sale.titularName = dto.titularName.trim();
-    sale.draftExpiresAt = this.draftExpiry();
+    sale.draftExpiresAt = await this.draftExpiry();
+    sale.folioSolicitud = String(sale.id);
     await this.salesRepository.save(sale);
     return saleToPublic((await this.salesRepository.findById(id))!);
   }
@@ -263,13 +405,14 @@ export class SalesService {
       }
       sale = existing;
     } else {
+      const { draftLimit } = await this.settingsService.getDraftPolicy();
       const count = await this.salesRepository.countActiveDrafts(
         user.userId,
         new Date(),
       );
-      if (count >= MAX_DRAFTS) {
+      if (count >= draftLimit) {
         throw new BadRequestException(
-          `Solo puedes tener ${MAX_DRAFTS} borradores activos`,
+          `Solo puedes tener ${draftLimit} borradores activos`,
         );
       }
       sale = this.salesRepository.create();
@@ -279,6 +422,7 @@ export class SalesService {
     }
 
     applyPayloadToSale(sale, dto.payload);
+    await this.assertDiscountAndSaldo(sale, user.userId);
     sale.status = SaleStatus.PENDING_PAYMENT;
     sale.draftExpiresAt = null;
     sale.titularName =
@@ -286,6 +430,22 @@ export class SalesService {
       (sale.holder ? fullName(sale.holder) : sale.titularName);
 
     const saved = await this.salesRepository.save(sale);
+    await this.syncFolioSolicitud(saved.id);
+
+    const discountPct = this.parseMoney(saved.promocionDescuento);
+    const globalMax = await this.settingsService.getGlobalMaxDiscount();
+    const grantId = await this.discountsService.consumeForSale(
+      user.userId,
+      discountPct,
+      globalMax,
+      saved.id,
+      user,
+    );
+    if (grantId != null) {
+      saved.discountGrantId = grantId;
+      await this.salesRepository.save(saved);
+    }
+
     const full = (await this.salesRepository.findById(saved.id))!;
     const titular =
       full.titularName || (full.holder ? fullName(full.holder) : '') || 'sin titular';
@@ -324,7 +484,6 @@ export class SalesService {
     sale.pagoInicial = (p.pagoInicial ?? '').trim();
     sale.plazo = (p.plazo ?? '').trim();
     sale.importeCadaPago = (p.importeCadaPago ?? '').trim();
-    sale.saldo = (p.saldo ?? '').trim();
     sale.fechaProximoPago = p.fechaProximoPago?.trim()
       ? p.fechaProximoPago.trim().slice(0, 10)
       : null;
@@ -333,6 +492,7 @@ export class SalesService {
     sale.cuenta = (p.cuenta ?? '').trim();
     sale.banco = (p.banco ?? '').trim();
     sale.nombreJefeVentas = (p.nombreJefeVentas ?? '').trim();
+    await this.assertDiscountAndSaldo(sale, user.userId);
     const n = Number(String(sale.precioPlan).replace(/[^0-9.-]/g, ''));
     if (Number.isFinite(n)) sale.amount = n.toFixed(2);
 
@@ -344,6 +504,21 @@ export class SalesService {
     const seller = await this.usersRepository.findById(user.userId);
     sale.nombreAsesor =
       sale.sellerName?.trim() || seller?.fullName?.trim() || '';
+
+    if (dto.ticketPdf?.dataBase64) {
+      const docs = (sale.documents ?? []).filter(
+        (d) => d.kind !== DocumentKind.TICKET_PAGO,
+      );
+      const ticket = new SaleDocument();
+      ticket.kind = DocumentKind.TICKET_PAGO;
+      ticket.name = dto.ticketPdf.name || `ticket-pago_${sale.id}.pdf`;
+      ticket.mime = dto.ticketPdf.mime || 'application/pdf';
+      ticket.dataBase64 = dto.ticketPdf.dataBase64;
+      ticket.driveFileId = null;
+      ticket.driveFileUrl = null;
+      docs.push(ticket);
+      sale.documents = docs;
+    }
 
     sale.status = SaleStatus.PENDING_SIGNATURE;
     await this.salesRepository.save(sale);
@@ -387,30 +562,78 @@ export class SalesService {
     firma.name = dto.firmaCliente.name || 'firma-cliente.png';
     firma.mime = dto.firmaCliente.mime || 'image/png';
     firma.dataBase64 = dto.firmaCliente.dataBase64;
+    firma.driveFileId = null;
+    firma.driveFileUrl = null;
     docs.push(firma);
-    sale.documents = docs;
-    sale.status = SaleStatus.COMPLETED;
 
-    await this.salesRepository.save(sale);
+    const docAtt = (kind: DocumentKind) => {
+      const d = docs.find((x) => x.kind === kind);
+      if (!d?.dataBase64) return null;
+      return { name: d.name, mime: d.mime, dataBase64: d.dataBase64 };
+    };
+    const documentosPayload: Record<string, unknown> = {
+      ine: docAtt(DocumentKind.INE),
+      comprobanteDomicilio: docAtt(DocumentKind.COMPROBANTE),
+      ticketPago: docAtt(DocumentKind.TICKET_PAGO),
+      firmaCliente: dto.firmaCliente,
+    };
 
-    // Drive (INE, comprobante, firma + vista previa carátula)
-    try {
-      const payload = saleToPayload(sale);
-      const driveInfo = await this.googleDrive.uploadSaleDocuments({
-        saleId: sale.id,
-        titularName: sale.titularName,
-        documentos: (payload.documentos ?? {}) as Record<string, unknown>,
-        caratulaPdf: dto.caratulaPdf ?? null,
-      });
-      if (driveInfo) {
+    const driveKeyToKind: Record<string, DocumentKind> = {
+      ine: DocumentKind.INE,
+      comprobanteDomicilio: DocumentKind.COMPROBANTE,
+      ticketPago: DocumentKind.TICKET_PAGO,
+      firmaCliente: DocumentKind.FIRMA,
+    };
+
+    if (this.googleDrive.isEnabled()) {
+      try {
+        const driveInfo = await this.googleDrive.uploadSaleDocuments({
+          saleId: sale.id,
+          titularName: sale.titularName,
+          fecha: sale.fecha,
+          documentos: documentosPayload,
+          caratulaPdf: dto.caratulaPdf ?? null,
+        });
+        if (!driveInfo) {
+          throw new Error('Drive no devolvió carpeta de venta');
+        }
+
+        for (const file of driveInfo.files) {
+          const kind = driveKeyToKind[file.key];
+          if (!kind) continue;
+          const doc = docs.find((d) => d.kind === kind);
+          if (!doc) continue;
+          doc.driveFileId = file.id;
+          doc.driveFileUrl = file.url;
+          // Firma y ticket se conservan en BD (pesos bajos) para vista previa PDF.
+          // INE / comprobante sí se limpian tras subir a Drive.
+          if (
+            kind !== DocumentKind.FIRMA &&
+            kind !== DocumentKind.TICKET_PAGO
+          ) {
+            doc.dataBase64 = null;
+          }
+        }
+
+        sale.documents = docs;
         sale.driveFolderId = driveInfo.folderId;
         sale.driveFolderUrl = driveInfo.folderUrl;
+        sale.driveFolderPath = driveInfo.folderName;
+        sale.status = SaleStatus.COMPLETED;
         await this.salesRepository.save(sale);
+      } catch (e) {
+        this.logger.error(
+          `Drive venta #${sale.id}: ${(e as Error).message}`,
+        );
+        throw new BadRequestException(
+          `No se pudo subir a Drive: ${(e as Error).message}. Intenta firmar de nuevo.`,
+        );
       }
-    } catch (e) {
-      this.logger.error(
-        `Drive venta #${sale.id}: ${(e as Error).message}`,
-      );
+    } else {
+      // Sin Drive: se conserva base64 (entorno local / no configurado)
+      sale.documents = docs;
+      sale.status = SaleStatus.COMPLETED;
+      await this.salesRepository.save(sale);
     }
 
     const full = (await this.salesRepository.findById(id))!;

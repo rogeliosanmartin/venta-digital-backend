@@ -51,6 +51,7 @@ export class Sale {
   @Column({ name: 'origen_venta', type: 'varchar', length: 80, default: '' })
   origenVenta!: string;
 
+  /** Folio de solicitud = id de la venta (se sincroniza al guardar). */
   @Column({ name: 'folio_solicitud', type: 'varchar', length: 80, default: '' })
   folioSolicitud!: string;
 
@@ -73,6 +74,18 @@ export class Sale {
   @Column({ name: 'nombre_plan', type: 'varchar', length: 180, default: '' })
   nombrePlan!: string;
 
+  /** Id product.template en Odoo */
+  @Column({ name: 'product_id', type: 'int', nullable: true })
+  productId!: number | null;
+
+  /** Id res.partner en Odoo (cliente asociado desde Mesa de Control) */
+  @Column({ name: 'odoo_partner_id', type: 'int', nullable: true })
+  odooPartnerId!: number | null;
+
+  /** Referencia interna Odoo (`default_code`) — solo informativo */
+  @Column({ name: 'product_default_code', type: 'varchar', length: 80, default: '' })
+  productDefaultCode!: string;
+
   @Column({ name: 'servicio_funerario', type: 'varchar', length: 180, default: '' })
   servicioFunerario!: string;
 
@@ -89,8 +102,9 @@ export class Sale {
   @Column({ name: 'parque_funeral', type: 'varchar', length: 180, default: '' })
   parqueFuneral!: string;
 
-  @Column({ type: 'varchar', length: 80, default: 'N/A' })
-  preasignacion!: string;
+  /** Bandera: si es true, aplica ubicación (parque/sección/cuadrante/número) */
+  @Column({ type: 'boolean', default: false })
+  preasignacion!: boolean;
 
   // —— Pago (se llena en paso aparte) ——
   @Column({ name: 'precio_plan', type: 'varchar', length: 40, default: '' })
@@ -101,6 +115,10 @@ export class Sale {
 
   @Column({ name: 'promocion_descuento', type: 'varchar', length: 120, default: '' })
   promocionDescuento!: string;
+
+  /** Grant de descuento especial consumido (si aplica). */
+  @Column({ name: 'discount_grant_id', type: 'int', nullable: true })
+  discountGrantId!: number | null;
 
   @Column({ type: 'varchar', length: 40, default: '' })
   anticipo!: string;
@@ -151,6 +169,10 @@ export class Sale {
 
   @Column({ name: 'drive_folder_url', type: 'varchar', length: 320, nullable: true })
   driveFolderUrl!: string | null;
+
+  /** Ruta lógica: AÑO/MES/FOLIO-nombrecliente */
+  @Column({ name: 'drive_folder_path', type: 'varchar', length: 320, nullable: true })
+  driveFolderPath!: string | null;
 
   @Index()
   @Column({ name: 'draft_expires_at', type: 'timestamptz', nullable: true })

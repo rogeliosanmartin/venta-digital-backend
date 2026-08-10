@@ -1,7 +1,9 @@
-import { Type } from 'class-transformer';
+import { Transform, Type } from 'class-transformer';
 import {
   IsArray,
+  IsBoolean,
   IsIn,
+  IsInt,
   IsObject,
   IsOptional,
   IsString,
@@ -82,12 +84,23 @@ export class SalePlanDto {
   planKind?: string;
 
   @IsOptional() @IsString() nombrePlan?: string;
+  @IsOptional() @Type(() => Number) @IsInt() productId?: number | null;
+  @IsOptional() @IsString() productDefaultCode?: string;
+  @IsOptional() @IsString() precioPlan?: string;
   @IsOptional() @IsString() seccion?: string;
   @IsOptional() @IsString() cuadrante?: string;
   @IsOptional() @IsString() numero?: string;
   @IsOptional() @IsString() servicioFunerario?: string;
   @IsOptional() @IsString() parqueFuneral?: string;
-  @IsOptional() @IsString() preasignacion?: string;
+  @IsOptional()
+  @Transform(({ value }) => {
+    if (typeof value === 'boolean') return value;
+    if (value == null || value === '') return false;
+    const t = String(value).trim().toLowerCase();
+    return ['true', '1', 'si', 'sí', 'yes'].includes(t);
+  })
+  @IsBoolean()
+  preasignacion?: boolean;
 }
 
 export class SalePagoDto {
@@ -128,6 +141,7 @@ export class SaleFormPayloadDto {
     ine?: SaleAttachmentDto | null;
     comprobanteDomicilio?: SaleAttachmentDto | null;
     firmaCliente?: SaleAttachmentDto | null;
+    ticketPago?: SaleAttachmentDto | null;
   };
 }
 
@@ -150,6 +164,12 @@ export class SavePaymentDto {
   @ValidateNested()
   @Type(() => SalePagoDto)
   pago!: SalePagoDto;
+
+  /** Ticket de pago PDF generado en el front. */
+  @IsOptional()
+  @ValidateNested()
+  @Type(() => SaleAttachmentDto)
+  ticketPdf?: SaleAttachmentDto | null;
 }
 
 export class SignSaleDto {

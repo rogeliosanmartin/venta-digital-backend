@@ -16,6 +16,11 @@ import { SaleHolder } from './modules/sales/entities/sale-holder.entity';
 import { SaleSecondContact } from './modules/sales/entities/sale-second-contact.entity';
 import { SaleBeneficiary } from './modules/sales/entities/sale-beneficiary.entity';
 import { SaleDocument } from './modules/sales/entities/sale-document.entity';
+import { SettingsModule } from './modules/settings/settings.module';
+import { AppSettings } from './modules/settings/entities/app-settings.entity';
+import { OdooModule } from './modules/odoo/odoo.module';
+import { DiscountsModule } from './modules/discounts/discounts.module';
+import { DiscountGrant } from './modules/discounts/entities/discount-grant.entity';
 
 @Module({
   imports: [
@@ -44,6 +49,8 @@ import { SaleDocument } from './modules/sales/entities/sale-document.entity';
           SaleSecondContact,
           SaleBeneficiary,
           SaleDocument,
+          AppSettings,
+          DiscountGrant,
         ],
         // Solo beta: crea/ajusta esquema de esta BD. No usar en producción.
         synchronize: config.get<string>('DB_SYNC') === 'true',
@@ -56,6 +63,9 @@ import { SaleDocument } from './modules/sales/entities/sale-document.entity';
     SalesModule,
     WhatsappModule,
     AuditModule,
+    SettingsModule,
+    OdooModule,
+    DiscountsModule,
   ],
 })
 export class AppModule {}

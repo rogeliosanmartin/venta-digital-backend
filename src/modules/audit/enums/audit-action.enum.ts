@@ -4,4 +4,6 @@ export enum AuditAction {
   ACTIVATE = 'ACTIVATE',
   DEACTIVATE = 'DEACTIVATE',
   DELETE = 'DELETE',
+  CANCEL = 'CANCEL',
+  APPLY = 'APPLY',
 }

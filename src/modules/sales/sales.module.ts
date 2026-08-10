@@ -2,7 +2,9 @@ import { Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { SalesController } from './sales.controller';
 import { DriveController } from './drive.controller';
+import { IntegrationsController } from './integrations.controller';
 import { SalesService } from './sales.service';
+import { ApiKeyGuard } from '../../common/guards/api-key.guard';
 import { SalesRepository } from './repositories/sales.repository';
 import { GoogleDriveService } from './google-drive.service';
 import { Sale } from './entities/sale.entity';
@@ -12,6 +14,8 @@ import { SaleBeneficiary } from './entities/sale-beneficiary.entity';
 import { SaleDocument } from './entities/sale-document.entity';
 import { UsersModule } from '../users/users.module';
 import { AuditModule } from '../audit/audit.module';
+import { SettingsModule } from '../settings/settings.module';
+import { DiscountsModule } from '../discounts/discounts.module';
 
 @Module({
   imports: [
@@ -24,9 +28,11 @@ import { AuditModule } from '../audit/audit.module';
     ]),
     UsersModule,
     AuditModule,
+    SettingsModule,
+    DiscountsModule,
   ],
-  controllers: [SalesController, DriveController],
-  providers: [SalesService, SalesRepository, GoogleDriveService],
+  controllers: [SalesController, DriveController, IntegrationsController],
+  providers: [SalesService, SalesRepository, GoogleDriveService, ApiKeyGuard],
   exports: [SalesService, GoogleDriveService],
 })
 export class SalesModule {}
