@@ -43,4 +43,74 @@ export class OdooController {
       limit ? Number(limit) : 20,
     );
   }
+
+  @Get('ubicaciones/parques')
+  @Roles(UserType.VENDEDOR, UserType.MONITOR, UserType.ADMIN)
+  searchParques(@Query('q') q?: string, @Query('limit') limit?: string) {
+    return this.odoo.searchParques(q, limit ? Number(limit) : 20);
+  }
+
+  @Get('ubicaciones/secciones')
+  @Roles(UserType.VENDEDOR, UserType.MONITOR, UserType.ADMIN)
+  searchSecciones(
+    @Query('parkId') parkId: string,
+    @Query('q') q?: string,
+    @Query('limit') limit?: string,
+  ) {
+    const id = Number(parkId);
+    if (!Number.isFinite(id) || id <= 0) {
+      throw new BadRequestException('parkId es obligatorio');
+    }
+    return this.odoo.searchSecciones(id, q, limit ? Number(limit) : 20);
+  }
+
+  @Get('ubicaciones/cuadrantes')
+  @Roles(UserType.VENDEDOR, UserType.MONITOR, UserType.ADMIN)
+  searchCuadrantes(
+    @Query('parkId') parkId: string,
+    @Query('sectionId') sectionId: string,
+    @Query('q') q?: string,
+    @Query('limit') limit?: string,
+  ) {
+    const park = Number(parkId);
+    const section = Number(sectionId);
+    if (!Number.isFinite(park) || park <= 0) {
+      throw new BadRequestException('parkId es obligatorio');
+    }
+    if (!Number.isFinite(section) || section <= 0) {
+      throw new BadRequestException('sectionId es obligatorio');
+    }
+    return this.odoo.searchCuadrantes(
+      park,
+      section,
+      q,
+      limit ? Number(limit) : 20,
+    );
+  }
+
+  @Get('ubicaciones/espacios')
+  @Roles(UserType.VENDEDOR, UserType.MONITOR, UserType.ADMIN)
+  searchEspacios(
+    @Query('parkId') parkId: string,
+    @Query('sectionId') sectionId: string,
+    @Query('quadrantId') quadrantId: string,
+    @Query('q') q?: string,
+    @Query('limit') limit?: string,
+  ) {
+    const park = Number(parkId);
+    const section = Number(sectionId);
+    const quadrant = Number(quadrantId);
+    if (!park || !section || !quadrant) {
+      throw new BadRequestException(
+        'parkId, sectionId y quadrantId son obligatorios',
+      );
+    }
+    return this.odoo.searchEspacios(
+      park,
+      section,
+      quadrant,
+      q,
+      limit ? Number(limit) : 20,
+    );
+  }
 }

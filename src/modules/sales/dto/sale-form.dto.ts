@@ -92,6 +92,10 @@ export class SalePlanDto {
   @IsOptional() @IsString() numero?: string;
   @IsOptional() @IsString() servicioFunerario?: string;
   @IsOptional() @IsString() parqueFuneral?: string;
+  @IsOptional() @Type(() => Number) @IsInt() parkId?: number | null;
+  @IsOptional() @Type(() => Number) @IsInt() sectionId?: number | null;
+  @IsOptional() @Type(() => Number) @IsInt() quadrantId?: number | null;
+  @IsOptional() @Type(() => Number) @IsInt() spaceId?: number | null;
   @IsOptional()
   @Transform(({ value }) => {
     if (typeof value === 'boolean') return value;
@@ -117,6 +121,8 @@ export class SalePagoDto {
   @IsOptional() @IsString() formaPago?: string;
   @IsOptional() @IsString() cuenta?: string;
   @IsOptional() @IsString() banco?: string;
+  @IsOptional() @IsString() montoRecibido?: string;
+  @IsOptional() @IsString() cambio?: string;
   @IsOptional() @IsString() nombreJefeVentas?: string;
   @IsOptional() @IsString() nombreAsesor?: string;
 }

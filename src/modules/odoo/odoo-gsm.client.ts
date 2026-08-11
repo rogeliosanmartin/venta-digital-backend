@@ -11,6 +11,13 @@ export type OdooPlanProduct = {
   isPlanProduct: boolean;
 };
 
+export type OdooUbicacionOption = {
+  id: number;
+  name: string;
+  code?: string | null;
+  status?: string | null;
+};
+
 @Injectable()
 export class OdooGsmClient {
   private readonly logger = new Logger(OdooGsmClient.name);
@@ -65,5 +72,77 @@ export class OdooGsmClient {
         typeof msg === 'string' ? msg : 'Error al consultar planes en Odoo',
       );
     }
+  }
+
+  private async getUbicaciones<T>(
+    path: string,
+    params: Record<string, string | number | undefined>,
+  ) {
+    if (!this.http) {
+      throw new ServiceUnavailableException(
+        'Integración Odoo no configurada (API_ODOO_GSM_URL)',
+      );
+    }
+    try {
+      const { data } = await this.http.get<T>(path, { params });
+      return Array.isArray(data) ? data : [];
+    } catch (e: any) {
+      const msg =
+        e?.response?.data?.message ||
+        e?.message ||
+        'Error al consultar ubicaciones en Odoo';
+      this.logger.error(`${path}: ${msg}`);
+      throw new ServiceUnavailableException(
+        typeof msg === 'string' ? msg : 'Error al consultar ubicaciones en Odoo',
+      );
+    }
+  }
+
+  searchParques(q?: string, limit = 20) {
+    return this.getUbicaciones<OdooUbicacionOption>('/ubicaciones/parques', {
+      q: q?.trim() || undefined,
+      limit,
+    });
+  }
+
+  searchSecciones(parkId: number, q?: string, limit = 20) {
+    return this.getUbicaciones<OdooUbicacionOption>('/ubicaciones/secciones', {
+      parkId,
+      q: q?.trim() || undefined,
+      limit,
+    });
+  }
+
+  searchCuadrantes(
+    parkId: number,
+    sectionId: number,
+    q?: string,
+    limit = 20,
+  ) {
+    return this.getUbicaciones<OdooUbicacionOption>(
+      '/ubicaciones/cuadrantes',
+      {
+        parkId,
+        sectionId,
+        q: q?.trim() || undefined,
+        limit,
+      },
+    );
+  }
+
+  searchEspacios(
+    parkId: number,
+    sectionId: number,
+    quadrantId: number,
+    q?: string,
+    limit = 20,
+  ) {
+    return this.getUbicaciones<OdooUbicacionOption>('/ubicaciones/espacios', {
+      parkId,
+      sectionId,
+      quadrantId,
+      q: q?.trim() || undefined,
+      limit,
+    });
   }
 }

@@ -46,6 +46,12 @@ export function fullName(p: {
     .join(' ');
 }
 
+function optionalInt(v: unknown): number | null {
+  if (v == null || v === '') return null;
+  const n = Number(v);
+  return Number.isFinite(n) ? n : null;
+}
+
 /** API pública: entidad tipada + payload ensamblado para el front/PDF. */
 export function saleToPublic(sale: Sale) {
   return {
@@ -56,6 +62,7 @@ export function saleToPublic(sale: Sale) {
     amount: Number(sale.amount) || 0,
     titularName: sale.titularName,
     odooPartnerId: sale.odooPartnerId ?? null,
+    odooSaleOrderId: sale.odooSaleOrderId ?? null,
     draftExpiresAt: sale.draftExpiresAt?.toISOString() ?? null,
     createdAt: sale.createdAt.toISOString(),
     updatedAt: sale.updatedAt.toISOString(),
@@ -188,6 +195,10 @@ export function saleToPayload(sale: Sale): Record<string, unknown> {
       numero: sale.numero,
       servicioFunerario: sale.servicioFunerario,
       parqueFuneral: sale.parqueFuneral,
+      parkId: sale.parkId,
+      sectionId: sale.sectionId,
+      quadrantId: sale.quadrantId,
+      spaceId: sale.spaceId,
       preasignacion: sale.preasignacion,
     },
     pago: {
@@ -204,6 +215,8 @@ export function saleToPayload(sale: Sale): Record<string, unknown> {
       formaPago: sale.formaPago,
       cuenta: sale.cuenta,
       banco: sale.banco,
+      montoRecibido: sale.montoRecibido,
+      cambio: sale.cambio,
       nombreJefeVentas: sale.nombreJefeVentas,
       nombreAsesor: sale.nombreAsesor,
     },
@@ -216,6 +229,7 @@ export function saleToPayload(sale: Sale): Record<string, unknown> {
       comprobanteDomicilio: findDoc(DocumentKind.COMPROBANTE),
       firmaCliente: findDoc(DocumentKind.FIRMA),
       ticketPago: findDoc(DocumentKind.TICKET_PAGO),
+      caratulaPdf: findDoc(DocumentKind.CARATULA),
     },
   };
 }
@@ -251,6 +265,9 @@ export function saleToAuditSnapshot(sale: Sale): Record<string, unknown> {
   }
   if (docs.some((d) => d.kind === DocumentKind.TICKET_PAGO)) {
     docLabels.push('Ticket de pago');
+  }
+  if (docs.some((d) => d.kind === DocumentKind.CARATULA)) {
+    docLabels.push('Carátula');
   }
   const docsOnDrive = docs.filter((d) => d.driveFileId).length;
 
@@ -298,6 +315,8 @@ export function saleToAuditSnapshot(sale: Sale): Record<string, unknown> {
     snap.formaPago = sale.formaPago;
     snap.banco = sale.banco;
     snap.cuenta = sale.cuenta;
+    if (sale.montoRecibido) snap.montoRecibido = sale.montoRecibido;
+    if (sale.cambio) snap.cambio = sale.cambio;
     snap.nombreAsesor = sale.nombreAsesor;
     snap.nombreJefeVentas = sale.nombreJefeVentas;
   }
@@ -356,11 +375,19 @@ export function applyPayloadToSale(sale: Sale, payload: SaleFormPayloadDto) {
     sale.cuadrante = s(plan.cuadrante);
     sale.numero = s(plan.numero);
     sale.parqueFuneral = s(plan.parqueFuneral);
+    sale.parkId = optionalInt(plan.parkId);
+    sale.sectionId = optionalInt(plan.sectionId);
+    sale.quadrantId = optionalInt(plan.quadrantId);
+    sale.spaceId = optionalInt(plan.spaceId);
   } else {
     sale.seccion = '';
     sale.cuadrante = '';
     sale.numero = '';
     sale.parqueFuneral = '';
+    sale.parkId = null;
+    sale.sectionId = null;
+    sale.quadrantId = null;
+    sale.spaceId = null;
   }
 
   // Pago: en captura ya vienen anticipo/importes; no pisar precio del plan con vacío
@@ -384,6 +411,8 @@ export function applyPayloadToSale(sale: Sale, payload: SaleFormPayloadDto) {
     sale.formaPago = s(pago.formaPago);
     sale.cuenta = s(pago.cuenta);
     sale.banco = s(pago.banco);
+    sale.montoRecibido = s(pago.montoRecibido);
+    sale.cambio = s(pago.cambio);
     sale.nombreAsesor = s(pago.nombreAsesor);
     sale.nombreJefeVentas = s(pago.nombreJefeVentas);
   }

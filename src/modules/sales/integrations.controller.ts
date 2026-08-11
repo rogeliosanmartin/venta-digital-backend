@@ -9,6 +9,7 @@ import {
 } from '@nestjs/common';
 import { ApiKeyGuard } from '../../common/guards/api-key.guard';
 import { SetOdooPartnerDto } from './dto/set-odoo-partner.dto';
+import { SetOdooSaleOrderDto } from './dto/set-odoo-sale-order.dto';
 import { SalesService } from './sales.service';
 
 /**
@@ -39,5 +40,14 @@ export class IntegrationsController {
     @Body() dto: SetOdooPartnerDto,
   ) {
     return this.salesService.setOdooPartner(id, dto.odooPartnerId);
+  }
+
+  /** Guarda el id de la cotización sale.order creada desde Odoo. */
+  @Patch('sales/:id/sale-order')
+  setSaleOrder(
+    @Param('id', ParseIntPipe) id: number,
+    @Body() dto: SetOdooSaleOrderDto,
+  ) {
+    return this.salesService.setOdooSaleOrder(id, dto.odooSaleOrderId);
   }
 }

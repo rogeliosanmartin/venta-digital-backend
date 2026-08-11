@@ -1,5 +1,6 @@
 import {
   BadRequestException,
+  ConflictException,
   ForbiddenException,
   Injectable,
   Logger,
@@ -67,6 +68,11 @@ export class SalesService {
         `El descuento no puede exceder ${max}%`,
       );
     }
+    this.recomputeSaldo(sale);
+  }
+
+  /** Recalcula saldo sin revalidar tope (p. ej. pago ya validado al finalizar). */
+  private recomputeSaldo(sale: Sale) {
     sale.saldo = computeSaldo(
       sale.precioPlan,
       sale.promocionDescuento,
@@ -186,6 +192,7 @@ export class SalesService {
         status: s.status,
         titularName: s.titularName,
         odooPartnerId: s.odooPartnerId ?? null,
+        odooSaleOrderId: s.odooSaleOrderId ?? null,
         contrato: s.contrato ?? '',
         nombrePlan: s.nombrePlan ?? '',
         productDefaultCode: s.productDefaultCode ?? '',
@@ -242,6 +249,30 @@ export class SalesService {
     await this.salesRepository.save(sale);
   }
 
+  /** Ventas ya firmadas: la carátula está en Drive pero no quedó en sale_documents. */
+  private async ensureCaratulaFromDrive(sale: Sale) {
+    const hasCaratula = sale.documents?.some(
+      (d) => d.kind === DocumentKind.CARATULA,
+    );
+    if (hasCaratula || !sale.driveFolderId) return;
+
+    const found = await this.googleDrive.findCaratulaInFolder(
+      sale.driveFolderId,
+      sale.id,
+    );
+    if (!found) return;
+
+    const doc = new SaleDocument();
+    doc.kind = DocumentKind.CARATULA;
+    doc.name = found.name;
+    doc.mime = 'application/pdf';
+    doc.driveFileId = found.id;
+    doc.driveFileUrl = found.url;
+    doc.dataBase64 = null;
+    sale.documents = [...(sale.documents ?? []), doc];
+    await this.salesRepository.save(sale);
+  }
+
   /** Recupera base64 de todos los adjuntos faltantes (p. ej. para Odoo). */
   private async hydrateAllDocuments(sale: Sale) {
     if (!this.googleDrive.isEnabled()) return;
@@ -286,6 +317,7 @@ export class SalesService {
     await this.purgeExpired();
     const sale = await this.salesRepository.findById(id);
     if (!sale) throw new NotFoundException('Venta no encontrada');
+    await this.ensureCaratulaFromDrive(sale);
     await this.hydrateAllDocuments(sale);
     return saleToPublic(sale);
   }
@@ -300,6 +332,32 @@ export class SalesService {
     return {
       id: sale.id,
       odooPartnerId: sale.odooPartnerId,
+    };
+  }
+
+  /** Asocia la cotización sale.order creada desde Mesa de Control. */
+  async setOdooSaleOrder(id: number, odooSaleOrderId: number) {
+    await this.purgeExpired();
+    const sale = await this.salesRepository.findById(id);
+    if (!sale) throw new NotFoundException('Venta no encontrada');
+    if (!sale.odooPartnerId) {
+      throw new BadRequestException(
+        'La venta debe tener un cliente Odoo asociado',
+      );
+    }
+    if (
+      sale.odooSaleOrderId &&
+      sale.odooSaleOrderId !== odooSaleOrderId
+    ) {
+      throw new ConflictException(
+        `La venta ya está asociada a la cotización Odoo ${sale.odooSaleOrderId}`,
+      );
+    }
+    sale.odooSaleOrderId = odooSaleOrderId;
+    await this.salesRepository.save(sale);
+    return {
+      id: sale.id,
+      odooSaleOrderId: sale.odooSaleOrderId,
     };
   }
 
@@ -477,28 +535,69 @@ export class SalesService {
     }
 
     const p = dto.pago;
-    sale.precioPlan = (p.precioPlan ?? '').trim();
-    sale.frecuencia = (p.frecuencia ?? '').trim();
-    sale.promocionDescuento = (p.promocionDescuento ?? '').trim();
-    sale.anticipo = (p.anticipo ?? '').trim();
-    sale.pagoInicial = (p.pagoInicial ?? '').trim();
-    sale.plazo = (p.plazo ?? '').trim();
-    sale.importeCadaPago = (p.importeCadaPago ?? '').trim();
-    sale.fechaProximoPago = p.fechaProximoPago?.trim()
-      ? p.fechaProximoPago.trim().slice(0, 10)
-      : null;
-    sale.diasEspecificosPago = (p.diasEspecificosPago ?? '').trim();
+
+    // Financiamiento ya quedó validado al finalizar la captura; aquí solo pago.
     sale.formaPago = (p.formaPago ?? '').trim();
     sale.cuenta = (p.cuenta ?? '').trim();
     sale.banco = (p.banco ?? '').trim();
     sale.nombreJefeVentas = (p.nombreJefeVentas ?? '').trim();
-    await this.assertDiscountAndSaldo(sale, user.userId);
-    const n = Number(String(sale.precioPlan).replace(/[^0-9.-]/g, ''));
-    if (Number.isFinite(n)) sale.amount = n.toFixed(2);
+
+    const forma = sale.formaPago.toUpperCase();
+    if (!['EFECTIVO', 'TRANSFERENCIA', 'CHEQUE'].includes(forma)) {
+      throw new BadRequestException('Indica una forma de pago válida');
+    }
+
+    const anticipoNum = Number(
+      String(sale.anticipo).replace(/[^0-9.-]/g, ''),
+    );
+    if (!Number.isFinite(anticipoNum) || anticipoNum <= 0) {
+      throw new BadRequestException(
+        'La venta debe tener un anticipo válido para registrar el pago',
+      );
+    }
 
     if (!sale.precioPlan) {
       throw new BadRequestException('Indica el precio del plan');
     }
+
+    if (forma === 'EFECTIVO') {
+      sale.cuenta = '';
+      sale.banco = '';
+      sale.montoRecibido = (p.montoRecibido ?? '').trim();
+      if (!sale.montoRecibido) {
+        throw new BadRequestException('Indica el efectivo recibido');
+      }
+      const received = Number(
+        String(sale.montoRecibido).replace(/[^0-9.-]/g, ''),
+      );
+      if (!Number.isFinite(received) || received <= 0) {
+        throw new BadRequestException('El efectivo recibido no es válido');
+      }
+      if (received < anticipoNum) {
+        throw new BadRequestException(
+          'El efectivo recibido debe cubrir el anticipo',
+        );
+      }
+      sale.cambio = String(
+        Number(Math.max(0, received - anticipoNum).toFixed(2)),
+      );
+    } else {
+      sale.montoRecibido = '';
+      sale.cambio = '';
+      if (!sale.banco) {
+        throw new BadRequestException('Indica el banco');
+      }
+      if (forma === 'TRANSFERENCIA' && !sale.cuenta) {
+        throw new BadRequestException('Indica la cuenta de transferencia');
+      }
+      if (forma === 'CHEQUE') {
+        sale.cuenta = '';
+      }
+    }
+
+    this.recomputeSaldo(sale);
+    const n = Number(String(sale.precioPlan).replace(/[^0-9.-]/g, ''));
+    if (Number.isFinite(n)) sale.amount = n.toFixed(2);
 
     // El asesor es el vendedor de la venta (usuario en sesión).
     const seller = await this.usersRepository.findById(user.userId);
@@ -566,6 +665,18 @@ export class SalesService {
     firma.driveFileUrl = null;
     docs.push(firma);
 
+    if (dto.caratulaPdf?.dataBase64) {
+      const prevCaratula = docs.find((d) => d.kind === DocumentKind.CARATULA);
+      const caratula = prevCaratula ?? new SaleDocument();
+      caratula.kind = DocumentKind.CARATULA;
+      caratula.name = dto.caratulaPdf.name || `${sale.id}-Caratula.pdf`;
+      caratula.mime = dto.caratulaPdf.mime || 'application/pdf';
+      caratula.dataBase64 = dto.caratulaPdf.dataBase64;
+      caratula.driveFileId = null;
+      caratula.driveFileUrl = null;
+      if (!prevCaratula) docs.push(caratula);
+    }
+
     const docAtt = (kind: DocumentKind) => {
       const d = docs.find((x) => x.kind === kind);
       if (!d?.dataBase64) return null;
@@ -583,6 +694,7 @@ export class SalesService {
       comprobanteDomicilio: DocumentKind.COMPROBANTE,
       ticketPago: DocumentKind.TICKET_PAGO,
       firmaCliente: DocumentKind.FIRMA,
+      caratulaPdf: DocumentKind.CARATULA,
     };
 
     if (this.googleDrive.isEnabled()) {
@@ -601,12 +713,21 @@ export class SalesService {
         for (const file of driveInfo.files) {
           const kind = driveKeyToKind[file.key];
           if (!kind) continue;
-          const doc = docs.find((d) => d.kind === kind);
-          if (!doc) continue;
+          let doc = docs.find((d) => d.kind === kind);
+          if (!doc) {
+            doc = new SaleDocument();
+            doc.kind = kind;
+            doc.name = file.name;
+            doc.mime =
+              kind === DocumentKind.CARATULA
+                ? 'application/pdf'
+                : 'application/octet-stream';
+            docs.push(doc);
+          }
           doc.driveFileId = file.id;
           doc.driveFileUrl = file.url;
           // Firma y ticket se conservan en BD (pesos bajos) para vista previa PDF.
-          // INE / comprobante sí se limpian tras subir a Drive.
+          // INE / comprobante / carátula sí se limpian tras subir a Drive.
           if (
             kind !== DocumentKind.FIRMA &&
             kind !== DocumentKind.TICKET_PAGO

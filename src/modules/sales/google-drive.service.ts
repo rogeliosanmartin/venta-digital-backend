@@ -503,6 +503,40 @@ export class GoogleDriveService {
     return this.uploadBuffer(this.folderId, fileName, mime, buffer);
   }
 
+  /** Busca la carátula ya subida en la carpeta de la venta (ventas firmadas antes del fix). */
+  async findCaratulaInFolder(
+    folderId: string,
+    saleId: number,
+  ): Promise<{ id: string; name: string; url: string | null } | null> {
+    if (!this.drive || !folderId?.trim()) return null;
+    const folio = String(saleId);
+    try {
+      const res = await this.drive.files.list({
+        q: [
+          `'${folderId}' in parents`,
+          `name contains '${folio}-Caratula'`,
+          'trashed = false',
+        ].join(' and '),
+        fields: 'files(id, name, webViewLink)',
+        pageSize: 1,
+        supportsAllDrives: true,
+        includeItemsFromAllDrives: true,
+      });
+      const file = res.data.files?.[0];
+      if (!file?.id) return null;
+      return {
+        id: file.id,
+        name: file.name ?? `${folio}-Caratula.pdf`,
+        url: file.webViewLink ?? null,
+      };
+    } catch (e) {
+      this.logger.warn(
+        `Drive: no se pudo buscar carátula venta #${saleId}: ${(e as Error).message}`,
+      );
+      return null;
+    }
+  }
+
   /** Descarga un archivo de Drive como base64 (p. ej. firma para vista previa). */
   async downloadFileBase64(
     fileId: string,

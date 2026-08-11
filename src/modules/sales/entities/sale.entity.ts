@@ -82,6 +82,10 @@ export class Sale {
   @Column({ name: 'odoo_partner_id', type: 'int', nullable: true })
   odooPartnerId!: number | null;
 
+  /** Id sale.order en Odoo (cotización generada desde Conciliación) */
+  @Column({ name: 'odoo_sale_order_id', type: 'int', nullable: true })
+  odooSaleOrderId!: number | null;
+
   /** Referencia interna Odoo (`default_code`) — solo informativo */
   @Column({ name: 'product_default_code', type: 'varchar', length: 80, default: '' })
   productDefaultCode!: string;
@@ -101,6 +105,19 @@ export class Sale {
 
   @Column({ name: 'parque_funeral', type: 'varchar', length: 180, default: '' })
   parqueFuneral!: string;
+
+  /** Ids Odoo para preasignación de ubicación (parque → espacio). */
+  @Column({ name: 'park_id', type: 'int', nullable: true })
+  parkId!: number | null;
+
+  @Column({ name: 'section_id', type: 'int', nullable: true })
+  sectionId!: number | null;
+
+  @Column({ name: 'quadrant_id', type: 'int', nullable: true })
+  quadrantId!: number | null;
+
+  @Column({ name: 'space_id', type: 'int', nullable: true })
+  spaceId!: number | null;
 
   /** Bandera: si es true, aplica ubicación (parque/sección/cuadrante/número) */
   @Column({ type: 'boolean', default: false })
@@ -149,6 +166,13 @@ export class Sale {
 
   @Column({ type: 'varchar', length: 80, default: '' })
   banco!: string;
+
+  /** Solo pago en efectivo: billetes recibidos y cambio entregado. */
+  @Column({ name: 'monto_recibido', type: 'varchar', length: 40, default: '' })
+  montoRecibido!: string;
+
+  @Column({ type: 'varchar', length: 40, default: '' })
+  cambio!: string;
 
   @Column({ name: 'nombre_asesor', type: 'varchar', length: 120, default: '' })
   nombreAsesor!: string;
