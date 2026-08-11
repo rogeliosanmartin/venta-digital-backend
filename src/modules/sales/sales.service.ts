@@ -163,7 +163,7 @@ export class SalesService {
 
   async listAllSales() {
     await this.purgeExpired();
-    const items = await this.salesRepository.findCompleted();
+    const items = await this.salesRepository.findForMonitor();
     return {
       scope: 'all' as const,
       items: items.map(saleToPublic),
@@ -181,7 +181,7 @@ export class SalesService {
    */
   async listForConciliation() {
     await this.purgeExpired();
-    const items = await this.salesRepository.findCompleted();
+    const items = await this.salesRepository.findForConciliation();
     return {
       scope: 'conciliation' as const,
       total: items.length,
@@ -335,11 +335,76 @@ export class SalesService {
     };
   }
 
+  /**
+   * Rechaza una venta desde Odoo (Mesa de Control).
+   * Solo permitido si aún no tiene cotización vinculada.
+   */
+  async rejectFromOdoo(id: number) {
+    await this.purgeExpired();
+    const sale = await this.salesRepository.findById(id);
+    if (!sale) throw new NotFoundException('Venta no encontrada');
+
+    if (sale.odooSaleOrderId) {
+      throw new ConflictException(
+        'No se puede rechazar una venta que ya tiene cotización en Odoo',
+      );
+    }
+    if (sale.status === SaleStatus.REJECTED) {
+      return {
+        id: sale.id,
+        status: sale.status,
+        alreadyRejected: true,
+      };
+    }
+    if (
+      sale.status !== SaleStatus.PENDING_PAYMENT &&
+      sale.status !== SaleStatus.PENDING_SIGNATURE
+    ) {
+      throw new BadRequestException(
+        'Solo se pueden rechazar ventas pendientes de pago o de firma',
+      );
+    }
+
+    const before = saleToAuditSnapshot(sale);
+    sale.status = SaleStatus.REJECTED;
+    await this.salesRepository.save(sale);
+
+    const titular =
+      sale.titularName || (sale.holder ? fullName(sale.holder) : '') || 'sin titular';
+
+    await this.auditService.record({
+      actor: {
+        userId: null,
+        fullName: 'Odoo (Mesa de Control)',
+        type: 'INTEGRATION',
+      },
+      action: AuditAction.CANCEL,
+      entityType: AuditEntityType.SALE,
+      entityId: sale.id,
+      summary: `Odoo rechazó venta #${sale.id} (${titular})`,
+      details: {
+        before,
+        after: saleToAuditSnapshot(sale),
+      },
+    });
+
+    return {
+      id: sale.id,
+      status: sale.status,
+      alreadyRejected: false,
+    };
+  }
+
   /** Asocia la cotización sale.order creada desde Mesa de Control. */
   async setOdooSaleOrder(id: number, odooSaleOrderId: number) {
     await this.purgeExpired();
     const sale = await this.salesRepository.findById(id);
     if (!sale) throw new NotFoundException('Venta no encontrada');
+    if (sale.status === SaleStatus.REJECTED) {
+      throw new BadRequestException(
+        'No se puede vincular cotización a una venta rechazada',
+      );
+    }
     if (!sale.odooPartnerId) {
       throw new BadRequestException(
         'La venta debe tener un cliente Odoo asociado',
@@ -524,6 +589,13 @@ export class SalesService {
     return saleToPublic(full);
   }
 
+  /** Importe a cobrar al registrar pago: pago inicial si existe, si no anticipo. */
+  private paymentDueAmount(sale: Sale): number {
+    const inicial = this.parseMoney(sale.pagoInicial);
+    if (inicial > 0) return inicial;
+    return this.parseMoney(sale.anticipo);
+  }
+
   async savePayment(id: number, user: AuthUserPayload, dto: SavePaymentDto) {
     const sale = await this.salesRepository.findById(id);
     if (!sale) throw new NotFoundException('Venta no encontrada');
@@ -547,16 +619,14 @@ export class SalesService {
       throw new BadRequestException('Indica una forma de pago válida');
     }
 
-    const anticipoNum = Number(
-      String(sale.anticipo).replace(/[^0-9.-]/g, ''),
-    );
-    if (!Number.isFinite(anticipoNum) || anticipoNum <= 0) {
+    const dueNum = this.paymentDueAmount(sale);
+    if (dueNum <= 0) {
       throw new BadRequestException(
-        'La venta debe tener un anticipo válido para registrar el pago',
+        'La venta debe tener pago inicial o anticipo válido para registrar el pago',
       );
     }
 
-    if (!sale.precioPlan) {
+    if (this.parseMoney(sale.precioPlan) <= 0) {
       throw new BadRequestException('Indica el precio del plan');
     }
 
@@ -573,13 +643,13 @@ export class SalesService {
       if (!Number.isFinite(received) || received <= 0) {
         throw new BadRequestException('El efectivo recibido no es válido');
       }
-      if (received < anticipoNum) {
+      if (received < dueNum) {
         throw new BadRequestException(
-          'El efectivo recibido debe cubrir el anticipo',
+          'El efectivo recibido debe cubrir el pago inicial o anticipo',
         );
       }
       sale.cambio = String(
-        Number(Math.max(0, received - anticipoNum).toFixed(2)),
+        Number(Math.max(0, received - dueNum).toFixed(2)),
       );
     } else {
       sale.montoRecibido = '';

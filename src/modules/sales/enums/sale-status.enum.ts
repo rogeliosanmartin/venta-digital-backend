@@ -7,4 +7,6 @@ export enum SaleStatus {
   PENDING_SIGNATURE = 'PENDING_SIGNATURE',
   /** Venta completa (firmada). */
   COMPLETED = 'COMPLETED',
+  /** Rechazada desde Odoo (sin cotización vinculada). */
+  REJECTED = 'REJECTED',
 }

@@ -72,7 +72,23 @@ export class SalesRepository {
     await this.repo.delete(id);
   }
 
-  findCompleted(): Promise<Sale[]> {
+  findForMonitor(): Promise<Sale[]> {
+    return this.repo.find({
+      where: {
+        status: In([
+          SaleStatus.COMPLETED,
+          SaleStatus.PENDING_SIGNATURE,
+          SaleStatus.PENDING_PAYMENT,
+          SaleStatus.REJECTED,
+        ]),
+      },
+      relations: RELATIONS,
+      order: { updatedAt: 'DESC' },
+    });
+  }
+
+  /** Ventas visibles en conciliación Odoo (excluye rechazadas). */
+  findForConciliation(): Promise<Sale[]> {
     return this.repo.find({
       where: {
         status: In([

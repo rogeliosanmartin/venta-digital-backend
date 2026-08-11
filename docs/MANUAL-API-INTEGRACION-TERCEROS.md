@@ -22,6 +22,7 @@ Documento para que **otra empresa o sistema externo** pueda:
 
 ```
 DRAFT → PENDING_PAYMENT → PENDING_SIGNATURE → COMPLETED
+                              ↘ REJECTED (desde Odoo, sin cotización)
 ```
 
 | Estado | Significado |
@@ -30,6 +31,7 @@ DRAFT → PENDING_PAYMENT → PENDING_SIGNATURE → COMPLETED
 | `PENDING_PAYMENT` | Captura lista; falta registrar pago |
 | `PENDING_SIGNATURE` | Pago registrado; falta firma del titular |
 | `COMPLETED` | Venta firmada; documentos en Google Drive |
+| `REJECTED` | Rechazada desde Odoo (solo si no tiene cotización vinculada) |
 
 ---
 
@@ -600,6 +602,31 @@ PATCH /api/integrations/odoo/sales/1001/sale-order
 { "odooSaleOrderId": 9001 }
 ```
 
+### 6.4 Rechazar venta (sin cotización)
+
+Odoo puede rechazar una venta digital **solo si aún no tiene cotización** vinculada (`odooSaleOrderId` nulo). La venta pasa a estatus `REJECTED` y deja de aparecer en el listado de conciliación.
+
+```http
+PATCH /api/integrations/odoo/sales/1001/reject
+```
+
+Sin cuerpo. Respuesta:
+
+```json
+{
+  "id": 1001,
+  "status": "REJECTED",
+  "alreadyRejected": false
+}
+```
+
+Errores habituales:
+
+| HTTP | Condición |
+|------|-----------|
+| 409 | Ya tiene `odooSaleOrderId` (cotización en Odoo) |
+| 400 | Estatus distinto de `PENDING_PAYMENT` o `PENDING_SIGNATURE` |
+
 ---
 
 ## 7. Estructura del `payload` de venta
@@ -734,6 +761,7 @@ sequenceDiagram
 | POST | `/sales/:id/sign` | VENDEDOR | Firmar + Drive |
 | GET | `/integrations/odoo/sales` | API Key | Listado ventas |
 | GET | `/integrations/odoo/sales/:id` | API Key | Detalle + archivos |
+| PATCH | `/integrations/odoo/sales/:id/reject` | API Key | Rechazar venta (sin cotización) |
 
 \* MONITOR/ADMIN con permiso `ventas.ver` también puede `GET /sales/:id`.
 

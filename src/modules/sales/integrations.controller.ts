@@ -50,4 +50,13 @@ export class IntegrationsController {
   ) {
     return this.salesService.setOdooSaleOrder(id, dto.odooSaleOrderId);
   }
+
+  /**
+   * Rechaza la venta en Venta Digital (estatus REJECTED).
+   * Solo si aún no tiene cotización Odoo vinculada.
+   */
+  @Patch('sales/:id/reject')
+  rejectSale(@Param('id', ParseIntPipe) id: number) {
+    return this.salesService.rejectFromOdoo(id);
+  }
 }
