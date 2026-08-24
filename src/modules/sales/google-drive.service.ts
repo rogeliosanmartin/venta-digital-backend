@@ -3,21 +3,11 @@ import { ConfigService } from '@nestjs/config';
 import { google, drive_v3 } from 'googleapis';
 import { OAuth2Client } from 'google-auth-library';
 import { Readable } from 'stream';
-import * as fs from 'fs';
-import * as path from 'path';
 
 type DriveAttachment = {
   name?: string;
   mime?: string;
   dataBase64?: string;
-};
-
-type StoredOAuthToken = {
-  refresh_token?: string;
-  access_token?: string;
-  expiry_date?: number | null;
-  token_type?: string;
-  scope?: string;
 };
 
 const DRIVE_SCOPES = [
@@ -32,14 +22,9 @@ export class GoogleDriveService {
   private folderId: string | null = null;
   private oauth2: OAuth2Client | null = null;
   private authMode: 'oauth' | 'service_account' | 'none' = 'none';
-  private tokenPath: string | null = null;
 
   constructor(private readonly config: ConfigService) {
     this.init();
-  }
-
-  private resolvePath(p: string) {
-    return path.isAbsolute(p) ? p : path.resolve(process.cwd(), p);
   }
 
   private init() {
@@ -62,90 +47,34 @@ export class GoogleDriveService {
     const redirectUri =
       this.config.get<string>('GOOGLE_OAUTH_REDIRECT_URI')?.trim() ||
       'http://localhost:3022/api/drive/oauth/callback';
-    const tokenPathRaw =
-      this.config.get<string>('GOOGLE_OAUTH_TOKEN_PATH')?.trim() ||
-      'secrets/google-oauth-token.json';
-
-    let id = clientId;
-    let secret = clientSecret;
-    const clientPath = this.config
-      .get<string>('GOOGLE_OAUTH_CLIENT_PATH')
+    const refreshToken = this.config
+      .get<string>('GOOGLE_OAUTH_REFRESH_TOKEN')
       ?.trim();
-    if ((!id || !secret) && clientPath) {
-      try {
-        const resolved = this.resolvePath(clientPath);
-        if (fs.existsSync(resolved)) {
-          const json = JSON.parse(fs.readFileSync(resolved, 'utf8')) as {
-            web?: { client_id?: string; client_secret?: string };
-            installed?: { client_id?: string; client_secret?: string };
-          };
-          id = id || json.web?.client_id || json.installed?.client_id;
-          secret =
-            secret || json.web?.client_secret || json.installed?.client_secret;
-        }
-      } catch (e) {
-        this.logger.warn(
-          `No se pudo leer GOOGLE_OAUTH_CLIENT_PATH: ${(e as Error).message}`,
-        );
-      }
+
+    if (!clientId || !clientSecret) return false;
+
+    this.oauth2 = new google.auth.OAuth2(clientId, clientSecret, redirectUri);
+    if (refreshToken) {
+      this.oauth2.setCredentials({ refresh_token: refreshToken });
+      this.drive = google.drive({ version: 'v3', auth: this.oauth2 });
+      this.authMode = 'oauth';
+      this.logger.log('Google Drive listo (OAuth usuario Workspace)');
+      return true;
     }
 
-    if (!id || !secret) return false;
-
-    this.oauth2 = new google.auth.OAuth2(id, secret, redirectUri);
-    this.tokenPath = this.resolvePath(tokenPathRaw);
-
-    if (fs.existsSync(this.tokenPath)) {
-      try {
-        const tokens = JSON.parse(
-          fs.readFileSync(this.tokenPath, 'utf8'),
-        ) as StoredOAuthToken;
-        if (tokens.refresh_token) {
-          this.oauth2.setCredentials(tokens);
-          this.oauth2.on('tokens', (fresh) => {
-            this.persistTokens({
-              ...tokens,
-              ...fresh,
-              refresh_token: fresh.refresh_token || tokens.refresh_token,
-            });
-          });
-          this.drive = google.drive({ version: 'v3', auth: this.oauth2 });
-          this.authMode = 'oauth';
-          this.logger.log('Google Drive listo (OAuth usuario Workspace)');
-          return true;
-        }
-      } catch (e) {
-        this.logger.warn(
-          `Token OAuth inválido: ${(e as Error).message}. Reautoriza en /api/drive/oauth/start`,
-        );
-      }
-    }
-
-    // Credenciales OAuth listas; falta consentimiento del usuario.
     this.logger.warn(
-      'OAuth Drive configurado pero sin refresh token. Abre /api/drive/oauth/start con el usuario Workspace.',
+      'Falta GOOGLE_OAUTH_REFRESH_TOKEN en .env. Abre /api/drive/oauth/start con el usuario Workspace.',
     );
-    return true; // no usar Service Account si ya hay OAuth configurado
+    return true;
   }
 
   private initServiceAccount() {
-    const keyPath = this.config.get<string>('GOOGLE_SERVICE_ACCOUNT_PATH')?.trim();
     const keyJson = this.config.get<string>('GOOGLE_SERVICE_ACCOUNT_JSON')?.trim();
 
     try {
-      let credentials: Record<string, unknown> | null = null;
-      if (keyJson) {
-        credentials = JSON.parse(keyJson) as Record<string, unknown>;
-      } else if (keyPath) {
-        const resolved = this.resolvePath(keyPath);
-        if (!fs.existsSync(resolved)) {
-          this.logger.warn(`No existe el archivo de credenciales: ${resolved}`);
-          return;
-        }
-        credentials = JSON.parse(
-          fs.readFileSync(resolved, 'utf8'),
-        ) as Record<string, unknown>;
-      }
+      const credentials = keyJson
+        ? (JSON.parse(keyJson) as Record<string, unknown>)
+        : null;
 
       if (!credentials) {
         this.logger.warn('Sin credenciales Drive (OAuth ni Service Account)');
@@ -166,13 +95,6 @@ export class GoogleDriveService {
         `No se pudo inicializar Google Drive: ${(e as Error).message}`,
       );
     }
-  }
-
-  private persistTokens(tokens: StoredOAuthToken) {
-    if (!this.tokenPath) return;
-    const dir = path.dirname(this.tokenPath);
-    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
-    fs.writeFileSync(this.tokenPath, JSON.stringify(tokens, null, 2), 'utf8');
   }
 
   isEnabled() {
@@ -209,27 +131,17 @@ export class GoogleDriveService {
       );
     }
     this.oauth2.setCredentials(tokens);
-    this.persistTokens(tokens as StoredOAuthToken);
-    this.oauth2.on('tokens', (fresh) => {
-      const prev = fs.existsSync(this.tokenPath!)
-        ? (JSON.parse(
-            fs.readFileSync(this.tokenPath!, 'utf8'),
-          ) as StoredOAuthToken)
-        : {};
-      this.persistTokens({
-        ...prev,
-        ...fresh,
-        refresh_token: fresh.refresh_token || prev.refresh_token,
-      });
-    });
     this.drive = google.drive({ version: 'v3', auth: this.oauth2 });
     this.authMode = 'oauth';
-    this.logger.log('OAuth Drive autorizado y token guardado');
+    this.logger.log(
+      'OAuth Drive autorizado en memoria. Copia GOOGLE_OAUTH_REFRESH_TOKEN al .env y reinicia.',
+    );
     return {
       ok: true,
       mode: this.authMode,
       folderId: this.folderId,
-      tokenPath: this.tokenPath,
+      refreshToken: tokens.refresh_token,
+      hint: 'Pon GOOGLE_OAUTH_REFRESH_TOKEN en el .env y reinicia el backend.',
     };
   }
 

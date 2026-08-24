@@ -1,11 +1,13 @@
 import { Sale } from '../entities/sale.entity';
 import { SaleHolder } from '../entities/sale-holder.entity';
 import { SaleSecondContact } from '../entities/sale-second-contact.entity';
+import { SaleSubstituteHolder } from '../entities/sale-substitute-holder.entity';
 import { SaleBeneficiary } from '../entities/sale-beneficiary.entity';
 import { SaleDocument } from '../entities/sale-document.entity';
 import { DocumentKind } from '../enums/document-kind.enum';
 import { PlanKind } from '../enums/plan-kind.enum';
 import { SaleFormPayloadDto } from '../dto/sale-form.dto';
+import { normalizeMxPhone } from '../utils/phone';
 
 function s(v: unknown, fallback = ''): string {
   return v == null ? fallback : String(v).trim();
@@ -52,6 +54,12 @@ function optionalInt(v: unknown): number | null {
   return Number.isFinite(n) ? n : null;
 }
 
+function toIso(value: Date | string | null | undefined): string | null {
+  if (!value) return null;
+  const d = value instanceof Date ? value : new Date(value);
+  return Number.isNaN(d.getTime()) ? null : d.toISOString();
+}
+
 /** API pública: entidad tipada + payload ensamblado para el front/PDF. */
 export function saleToPublic(sale: Sale) {
   return {
@@ -63,18 +71,41 @@ export function saleToPublic(sale: Sale) {
     titularName: sale.titularName,
     odooPartnerId: sale.odooPartnerId ?? null,
     odooSaleOrderId: sale.odooSaleOrderId ?? null,
-    draftExpiresAt: sale.draftExpiresAt?.toISOString() ?? null,
-    createdAt: sale.createdAt.toISOString(),
-    updatedAt: sale.updatedAt.toISOString(),
+    odooReceptionSynced: sale.odooReceptionSynced,
+    draftExpiresAt: toIso(sale.draftExpiresAt),
+    createdAt: toIso(sale.createdAt) ?? '',
+    updatedAt: toIso(sale.updatedAt) ?? '',
     driveFolderUrl: sale.driveFolderUrl,
     driveFolderPath: sale.driveFolderPath,
     payload: saleToPayload(sale),
   };
 }
 
+/** Listado del vendedor/monitor: sin adjuntos ni payload completo. */
+export function saleToListItem(sale: Sale) {
+  return {
+    id: sale.id,
+    sellerId: sale.sellerId,
+    sellerName: sale.sellerName,
+    status: sale.status,
+    amount: Number(sale.amount) || 0,
+    titularName: sale.titularName,
+    odooPartnerId: sale.odooPartnerId ?? null,
+    odooSaleOrderId: sale.odooSaleOrderId ?? null,
+    odooReceptionSynced: sale.odooReceptionSynced,
+    draftExpiresAt: toIso(sale.draftExpiresAt),
+    createdAt: toIso(sale.createdAt) ?? '',
+    updatedAt: toIso(sale.updatedAt) ?? '',
+    driveFolderUrl: sale.driveFolderUrl,
+    driveFolderPath: sale.driveFolderPath,
+    payload: {},
+  };
+}
+
 export function saleToPayload(sale: Sale): Record<string, unknown> {
   const h = sale.holder;
   const sc = sale.secondContact;
+  const ts = sale.substituteHolder;
   const bens = [...(sale.beneficiaries ?? [])].sort(
     (a, b) => a.sortOrder - b.sortOrder,
   );
@@ -85,7 +116,7 @@ export function saleToPayload(sale: Sale): Record<string, unknown> {
     return {
       name: d.name,
       mime: d.mime,
-      dataBase64: d.dataBase64 ?? '',
+      dataBase64: d.driveFileUrl ? '' : (d.dataBase64 ?? ''),
       driveFileId: d.driveFileId ?? null,
       driveFileUrl: d.driveFileUrl ?? null,
     };
@@ -96,6 +127,10 @@ export function saleToPayload(sale: Sale): Record<string, unknown> {
       fecha: sale.fecha ?? '',
       contrato: sale.contrato,
       origenVenta: sale.origenVenta,
+      branchId: sale.branchId,
+      branchName: sale.branchName,
+      serviceTypeId: sale.serviceTypeId,
+      serviceTypeName: sale.serviceTypeName,
       folioSolicitud: sale.folioSolicitud || String(sale.id),
       fechaServicio: sale.fechaServicio ?? '',
       estatus: sale.estatus,
@@ -143,46 +178,11 @@ export function saleToPayload(sale: Sale): Record<string, unknown> {
           domicilioEntregaDocumentacion: sc.domicilioEntregaDocumentacion,
         }
       : {},
-    beneficiarios: bens.map((b) => ({
-      apellidoPaterno: b.apellidoPaterno,
-      apellidoMaterno: b.apellidoMaterno,
-      nombres: b.nombres,
-      parentesco: b.parentesco,
-      celular: b.celular,
-      fechaNacimiento: b.fechaNacimiento ?? '',
-    })),
-    // compat PDF / front antiguo
+    beneficiarios: bens.map((b) => benToPayload(b)),
     derechohabientes: {
-      titularSustituto: bens[0]
-        ? {
-            apellidoPaterno: bens[0].apellidoPaterno,
-            apellidoMaterno: bens[0].apellidoMaterno,
-            nombres: bens[0].nombres,
-            parentesco: bens[0].parentesco,
-            celular: bens[0].celular,
-            fechaNacimiento: bens[0].fechaNacimiento ?? '',
-          }
-        : emptyBen(),
-      primerBeneficiario: bens[0]
-        ? {
-            apellidoPaterno: bens[0].apellidoPaterno,
-            apellidoMaterno: bens[0].apellidoMaterno,
-            nombres: bens[0].nombres,
-            parentesco: bens[0].parentesco,
-            celular: bens[0].celular,
-            fechaNacimiento: bens[0].fechaNacimiento ?? '',
-          }
-        : emptyBen(),
-      segundoBeneficiario: bens[1]
-        ? {
-            apellidoPaterno: bens[1].apellidoPaterno,
-            apellidoMaterno: bens[1].apellidoMaterno,
-            nombres: bens[1].nombres,
-            parentesco: bens[1].parentesco,
-            celular: bens[1].celular,
-            fechaNacimiento: bens[1].fechaNacimiento ?? '',
-          }
-        : emptyBen(),
+      titularSustituto: substituteToPayload(ts),
+      primerBeneficiario: benToPayload(bens[0]),
+      segundoBeneficiario: benToPayload(bens[1]),
     },
     ubicacionPlan: {
       planKind: sale.planKind,
@@ -200,6 +200,7 @@ export function saleToPayload(sale: Sale): Record<string, unknown> {
       quadrantId: sale.quadrantId,
       spaceId: sale.spaceId,
       preasignacion: sale.preasignacion,
+      withoutInterest: sale.withoutInterest,
     },
     pago: {
       precioPlan: sale.precioPlan,
@@ -245,6 +246,49 @@ function emptyBen() {
   };
 }
 
+function benToPayload(b: SaleBeneficiary | null | undefined) {
+  if (!b) return emptyBen();
+  return {
+    apellidoPaterno: b.apellidoPaterno,
+    apellidoMaterno: b.apellidoMaterno,
+    nombres: b.nombres,
+    parentesco: b.parentesco,
+    celular: b.celular,
+    fechaNacimiento: b.fechaNacimiento ?? '',
+  };
+}
+
+function substituteToPayload(sh: SaleSubstituteHolder | null | undefined) {
+  if (!sh) return emptyBen();
+  return {
+    apellidoPaterno: sh.apellidoPaterno,
+    apellidoMaterno: sh.apellidoMaterno,
+    nombres: sh.nombres,
+    parentesco: sh.parentesco,
+    celular: sh.celular,
+    fechaNacimiento: sh.fechaNacimiento ?? '',
+  };
+}
+
+function applyBenPayload(
+  row: SaleBeneficiary | SaleSubstituteHolder,
+  b: {
+    apellidoPaterno?: string;
+    apellidoMaterno?: string;
+    nombres?: string;
+    parentesco?: string;
+    celular?: string;
+    fechaNacimiento?: string;
+  },
+) {
+  row.apellidoPaterno = s(b.apellidoPaterno);
+  row.apellidoMaterno = s(b.apellidoMaterno);
+  row.nombres = s(b.nombres);
+  row.parentesco = s(b.parentesco);
+  row.celular = normalizeMxPhone(b.celular);
+  row.fechaNacimiento = dateOrNull(b.fechaNacimiento);
+}
+
 /**
  * Snapshot plano para bitácora (sin base64 ni datos sensibles de archivos).
  */
@@ -279,6 +323,8 @@ export function saleToAuditSnapshot(sale: Sale): Record<string, unknown> {
     fecha: sale.fecha ?? '',
     contrato: sale.contrato,
     origenVenta: sale.origenVenta,
+    sucursal: sale.branchName || sale.branchId,
+    tipoServicio: sale.serviceTypeName || sale.serviceTypeId,
     folioSolicitud: sale.folioSolicitud || String(sale.id),
     curp: h?.curp ?? '',
     celular: h?.celular1 ?? '',
@@ -346,8 +392,15 @@ export function applyPayloadToSale(sale: Sale, payload: SaleFormPayloadDto) {
   const pago = payload.pago ?? {};
 
   sale.fecha = dateOrNull(meta.fecha);
-  sale.contrato = s(meta.contrato);
+  const contrato = s(meta.contrato);
+  if (contrato) {
+    sale.contrato = contrato;
+  }
   sale.origenVenta = s(meta.origenVenta);
+  sale.branchId = optionalInt(meta.branchId);
+  sale.branchName = s(meta.branchName);
+  sale.serviceTypeId = optionalInt(meta.serviceTypeId);
+  sale.serviceTypeName = s(meta.serviceTypeName);
   // folioSolicitud: lo asigna el servidor (= id de venta)
   sale.fechaServicio = dateOrNull(meta.fechaServicio);
   sale.estatus = s(meta.estatus, 'ACTIVO');
@@ -370,6 +423,7 @@ export function applyPayloadToSale(sale: Sale, payload: SaleFormPayloadDto) {
   sale.servicioFunerario = s(plan.servicioFunerario);
   const preasig = Boolean(plan.preasignacion);
   sale.preasignacion = sale.planKind === PlanKind.PARQUE && preasig;
+  sale.withoutInterest = Boolean(plan.withoutInterest);
   if (sale.preasignacion) {
     sale.seccion = s(plan.seccion);
     sale.cuadrante = s(plan.cuadrante);
@@ -433,8 +487,8 @@ export function applyPayloadToSale(sale: Sale, payload: SaleFormPayloadDto) {
   h.estadoCivil = s(c.estadoCivil);
   h.sindicalizado = s(c.sindicalizado);
   h.observaciones = s(c.observaciones);
-  h.celular1 = s(c.celular1);
-  h.celular2 = s(c.celular2);
+  h.celular1 = normalizeMxPhone(c.celular1);
+  h.celular2 = normalizeMxPhone(c.celular2);
   h.correo = s(c.correo);
   h.direccion = s(c.direccion);
   h.colonia = s(c.colonia);
@@ -452,7 +506,7 @@ export function applyPayloadToSale(sale: Sale, payload: SaleFormPayloadDto) {
   s2.apellidoPaterno = s(sc.apellidoPaterno);
   s2.apellidoMaterno = s(sc.apellidoMaterno);
   s2.nombres = s(sc.nombres);
-  s2.celular = s(sc.celular);
+  s2.celular = normalizeMxPhone(sc.celular);
   s2.parentesco = s(sc.parentesco);
   s2.direccion = s(sc.direccion);
   s2.colonia = s(sc.colonia);
@@ -460,6 +514,14 @@ export function applyPayloadToSale(sale: Sale, payload: SaleFormPayloadDto) {
   s2.entreCalles = s(sc.entreCalles);
   s2.fechaNacimiento = dateOrNull(sc.fechaNacimiento);
   s2.domicilioEntregaDocumentacion = s(sc.domicilioEntregaDocumentacion);
+
+  const ts = payload.derechohabientes?.titularSustituto;
+  if (ts && (s(ts.nombres) || s(ts.apellidoPaterno) || s(ts.apellidoMaterno))) {
+    if (!sale.substituteHolder) sale.substituteHolder = new SaleSubstituteHolder();
+    applyBenPayload(sale.substituteHolder, ts);
+  } else {
+    sale.substituteHolder = null;
+  }
 
   let list = payload.beneficiarios;
   if (!list?.length && (payload as { derechohabientes?: unknown }).derechohabientes) {
@@ -482,7 +544,7 @@ export function applyPayloadToSale(sale: Sale, payload: SaleFormPayloadDto) {
     row.apellidoMaterno = s(b.apellidoMaterno);
     row.nombres = s(b.nombres);
     row.parentesco = s(b.parentesco);
-    row.celular = s(b.celular);
+    row.celular = normalizeMxPhone(b.celular);
     row.fechaNacimiento = dateOrNull(b.fechaNacimiento);
     beneficiaries.push(row);
   });

@@ -29,11 +29,15 @@ import {
   saleToAuditSnapshot,
   saleToPayload,
   saleToPublic,
+  saleToListItem,
 } from './mappers/sale.mapper';
 import { assertValidCurp } from './utils/curp';
+import { assertMxPhone } from './utils/phone';
 import { SaleDocument } from './entities/sale-document.entity';
 import { SettingsService } from '../settings/settings.service';
 import { DiscountsService } from '../discounts/discounts.service';
+import { OdooGsmClient } from '../odoo/odoo-gsm.client';
+import { PlanKind } from './enums/plan-kind.enum';
 
 @Injectable()
 export class SalesService {
@@ -46,6 +50,7 @@ export class SalesService {
     private readonly googleDrive: GoogleDriveService,
     private readonly settingsService: SettingsService,
     private readonly discountsService: DiscountsService,
+    private readonly odooGsm: OdooGsmClient,
   ) {}
 
   private parseMoney(v: unknown): number {
@@ -90,6 +95,76 @@ export class SalesService {
     await this.salesRepository.save(sale);
   }
 
+  /** Aparta park.space en Odoo cuando la venta tiene preasignación de parque. */
+  private async reservePreassignedSpace(sale: Sale) {
+    if (
+      sale.planKind !== PlanKind.PARQUE ||
+      !sale.preasignacion ||
+      !sale.spaceId
+    ) {
+      return;
+    }
+
+    if (!this.odooGsm.isConfigured()) {
+      throw new BadRequestException(
+        'Integración Odoo no configurada; no se pudo apartar la ubicación',
+      );
+    }
+
+    const folio = sale.folioSolicitud?.trim() || String(sale.id);
+    const sellerName = sale.sellerName?.trim() || 'Vendedor';
+
+    await this.odooGsm.reserveSpace({
+      spaceId: sale.spaceId,
+      folio,
+      sellerName,
+    });
+  }
+
+  /**
+   * Envía o actualiza el expediente virtual en Odoo (Mesa de Control).
+   * No revierte la venta si Odoo falla; devuelve el resultado para avisar al front.
+   */
+  private async syncReceptionToOdoo(
+    saleId: number,
+  ): Promise<{ synced: boolean; error?: string }> {
+    if (!this.odooGsm.isConfigured()) {
+      const msg = 'API Odoo no configurada (API_ODOO_GSM_URL)';
+      this.logger.warn(`Venta #${saleId}: ${msg}; expediente no sincronizado`);
+      return { synced: false, error: msg };
+    }
+
+    const sale = await this.salesRepository.findById(saleId);
+    if (!sale) {
+      return { synced: false, error: 'Venta no encontrada' };
+    }
+
+    if (
+      sale.status === SaleStatus.DRAFT ||
+      sale.status === SaleStatus.REJECTED
+    ) {
+      return { synced: false, error: 'La venta aún no está lista para Odoo' };
+    }
+
+    try {
+      await this.ensureCaratulaFromDrive(sale);
+      await this.hydrateAllDocuments(sale);
+      const fresh = (await this.salesRepository.findById(saleId))!;
+      const payload = saleToPublic(fresh);
+      await this.odooGsm.syncVdReception(payload as unknown as Record<string, unknown>);
+      fresh.odooReceptionSynced = true;
+      await this.salesRepository.save(fresh);
+      this.logger.log(`Expediente Odoo sincronizado para venta #${saleId}`);
+      return { synced: true };
+    } catch (e) {
+      const msg = (e as Error).message || 'Error desconocido';
+      this.logger.error(
+        `Venta #${saleId}: no se pudo sincronizar expediente Odoo — ${msg}`,
+      );
+      return { synced: false, error: msg };
+    }
+  }
+
   private async draftExpiry(from = new Date()) {
     const { draftTtlHours } = await this.settingsService.getDraftPolicy();
     return new Date(from.getTime() + draftTtlHours * 60 * 60 * 1000);
@@ -108,6 +183,21 @@ export class SalesService {
   private validateCapture(payload: UpsertSaleDto['payload'], strictDocs: boolean) {
     try {
       assertValidCurp(payload.contacto?.curp);
+      assertMxPhone(payload.contacto?.celular1, 'Celular 1 del titular', true);
+      assertMxPhone(payload.contacto?.celular2, 'Celular 2 del titular');
+      assertMxPhone(
+        payload.segundoContacto?.celular,
+        'Celular del segundo contacto',
+        true,
+      );
+      assertMxPhone(
+        payload.derechohabientes?.titularSustituto?.celular,
+        'Celular del titular sustituto',
+      );
+      const people = payload.beneficiarios ?? [];
+      people.forEach((b, i) => {
+        assertMxPhone(b?.celular, `Celular del beneficiario ${i + 1}`);
+      });
     } catch (e) {
       throw new BadRequestException((e as Error).message);
     }
@@ -121,6 +211,15 @@ export class SalesService {
       throw new BadRequestException('Solo puedes agregar hasta 2 beneficiarios');
     }
 
+    const branchId = Number(payload.meta?.branchId);
+    if (!Number.isFinite(branchId) || branchId <= 0) {
+      throw new BadRequestException('La sucursal es obligatoria');
+    }
+    const serviceTypeId = Number(payload.meta?.serviceTypeId);
+    if (!Number.isFinite(serviceTypeId) || serviceTypeId <= 0) {
+      throw new BadRequestException('El tipo de servicio es obligatorio');
+    }
+
     if (strictDocs) {
       if (!payload.documentos?.ine || !payload.documentos?.comprobanteDomicilio) {
         throw new BadRequestException(
@@ -132,7 +231,7 @@ export class SalesService {
 
   async listOwnSales(sellerId: number) {
     await this.purgeExpired();
-    const items = await this.salesRepository.findBySellerId(sellerId);
+    const items = await this.salesRepository.findSummariesBySellerId(sellerId);
     const now = Date.now();
     const visible = items.filter((s) => {
       if (s.status === SaleStatus.DRAFT) {
@@ -147,9 +246,9 @@ export class SalesService {
 
     return {
       scope: 'own' as const,
-      items: visible.map(saleToPublic),
-      drafts: drafts.map(saleToPublic),
-      submitted: pipeline.map(saleToPublic),
+      items: visible.map(saleToListItem),
+      drafts: drafts.map(saleToListItem),
+      submitted: pipeline.map(saleToListItem),
       draftCount: drafts.length,
       draftLimit,
       draftTtlHours,
@@ -175,10 +274,7 @@ export class SalesService {
     };
   }
 
-  /**
-   * Listado liviano para conciliación Odoo (sin adjuntos/base64).
-   * Misma fuente que el monitor: pagos / firma / completadas.
-   */
+  /** Listado liviano para integraciones Odoo (sin adjuntos/base64). */
   async listForConciliation() {
     await this.purgeExpired();
     const items = await this.salesRepository.findForConciliation();
@@ -337,18 +433,18 @@ export class SalesService {
 
   /**
    * Rechaza una venta desde Odoo (Mesa de Control).
-   * Solo permitido si aún no tiene cotización vinculada.
+   * Permite cancelar ventas pendientes o ya completadas (expediente cancelado).
    */
-  async rejectFromOdoo(id: number) {
+  async rejectFromOdoo(id: number, reason: string) {
     await this.purgeExpired();
     const sale = await this.salesRepository.findById(id);
     if (!sale) throw new NotFoundException('Venta no encontrada');
 
-    if (sale.odooSaleOrderId) {
-      throw new ConflictException(
-        'No se puede rechazar una venta que ya tiene cotización en Odoo',
-      );
+    const trimmedReason = reason.trim();
+    if (!trimmedReason) {
+      throw new BadRequestException('El motivo de cancelación es obligatorio');
     }
+
     if (sale.status === SaleStatus.REJECTED) {
       return {
         id: sale.id,
@@ -358,15 +454,17 @@ export class SalesService {
     }
     if (
       sale.status !== SaleStatus.PENDING_PAYMENT &&
-      sale.status !== SaleStatus.PENDING_SIGNATURE
+      sale.status !== SaleStatus.PENDING_SIGNATURE &&
+      sale.status !== SaleStatus.COMPLETED
     ) {
       throw new BadRequestException(
-        'Solo se pueden rechazar ventas pendientes de pago o de firma',
+        'Solo se pueden cancelar ventas pendientes de pago, de firma o completadas',
       );
     }
 
     const before = saleToAuditSnapshot(sale);
     sale.status = SaleStatus.REJECTED;
+    sale.odooSaleOrderId = null;
     await this.salesRepository.save(sale);
 
     const titular =
@@ -381,10 +479,11 @@ export class SalesService {
       action: AuditAction.CANCEL,
       entityType: AuditEntityType.SALE,
       entityId: sale.id,
-      summary: `Odoo rechazó venta #${sale.id} (${titular})`,
+      summary: `Odoo canceló venta #${sale.id} (${titular})`,
       details: {
         before,
         after: saleToAuditSnapshot(sale),
+        reason: trimmedReason,
       },
     });
 
@@ -395,8 +494,69 @@ export class SalesService {
     };
   }
 
+  /** Desvincula la cotización Odoo sin rechazar la venta digital. */
+  async clearOdooSaleOrderFromOdoo(id: number, reason: string) {
+    await this.purgeExpired();
+    const sale = await this.salesRepository.findById(id);
+    if (!sale) throw new NotFoundException('Venta no encontrada');
+
+    const trimmedReason = reason.trim();
+    if (!trimmedReason) {
+      throw new BadRequestException('El motivo es obligatorio');
+    }
+    if (sale.status === SaleStatus.REJECTED) {
+      throw new BadRequestException(
+        'No se puede desvincular cotización de una venta rechazada',
+      );
+    }
+    if (!sale.odooSaleOrderId) {
+      return {
+        id: sale.id,
+        odooSaleOrderId: null,
+        alreadyCleared: true,
+      };
+    }
+
+    const before = saleToAuditSnapshot(sale);
+    const previousOrderId = sale.odooSaleOrderId;
+    sale.odooSaleOrderId = null;
+    sale.contrato = '';
+    await this.salesRepository.save(sale);
+
+    const titular =
+      sale.titularName || (sale.holder ? fullName(sale.holder) : '') || 'sin titular';
+
+    await this.auditService.record({
+      actor: {
+        userId: null,
+        fullName: 'Odoo (Mesa de Control)',
+        type: 'INTEGRATION',
+      },
+      action: AuditAction.UPDATE,
+      entityType: AuditEntityType.SALE,
+      entityId: sale.id,
+      summary: `Odoo desvinculó cotización de venta #${sale.id} (${titular})`,
+      details: {
+        before,
+        after: saleToAuditSnapshot(sale),
+        reason: trimmedReason,
+        previousOdooSaleOrderId: previousOrderId,
+      },
+    });
+
+    return {
+      id: sale.id,
+      odooSaleOrderId: sale.odooSaleOrderId,
+      alreadyCleared: false,
+    };
+  }
+
   /** Asocia la cotización sale.order creada desde Mesa de Control. */
-  async setOdooSaleOrder(id: number, odooSaleOrderId: number) {
+  async setOdooSaleOrder(
+    id: number,
+    odooSaleOrderId: number,
+    contrato?: string,
+  ) {
     await this.purgeExpired();
     const sale = await this.salesRepository.findById(id);
     if (!sale) throw new NotFoundException('Venta no encontrada');
@@ -419,10 +579,15 @@ export class SalesService {
       );
     }
     sale.odooSaleOrderId = odooSaleOrderId;
+    const quoteName = (contrato || '').trim();
+    if (quoteName) {
+      sale.contrato = quoteName;
+    }
     await this.salesRepository.save(sale);
     return {
       id: sale.id,
       odooSaleOrderId: sale.odooSaleOrderId,
+      contrato: sale.contrato,
     };
   }
 
@@ -555,6 +720,16 @@ export class SalesService {
     const saved = await this.salesRepository.save(sale);
     await this.syncFolioSolicitud(saved.id);
 
+    try {
+      const withFolio = (await this.salesRepository.findById(saved.id))!;
+      await this.reservePreassignedSpace(withFolio);
+    } catch (e) {
+      saved.status = SaleStatus.DRAFT;
+      saved.draftExpiresAt = await this.draftExpiry();
+      await this.salesRepository.save(saved);
+      throw e;
+    }
+
     const discountPct = this.parseMoney(saved.promocionDescuento);
     const globalMax = await this.settingsService.getGlobalMaxDiscount();
     const grantId = await this.discountsService.consumeForSale(
@@ -586,7 +761,13 @@ export class SalesService {
       details: { after: saleToAuditSnapshot(full) },
     });
 
-    return saleToPublic(full);
+    const odooSync = await this.syncReceptionToOdoo(saved.id);
+    const synced = (await this.salesRepository.findById(saved.id))!;
+
+    return {
+      ...saleToPublic(synced),
+      odooSyncError: odooSync.error ?? null,
+    };
   }
 
   /** Importe a cobrar al registrar pago: pago inicial si existe, si no anticipo. */
@@ -709,7 +890,13 @@ export class SalesService {
       details: { after: saleToAuditSnapshot(full) },
     });
 
-    return saleToPublic(full);
+    const odooSync = await this.syncReceptionToOdoo(sale.id);
+    const synced = (await this.salesRepository.findById(id))!;
+
+    return {
+      ...saleToPublic(synced),
+      odooSyncError: odooSync.error ?? null,
+    };
   }
 
   async signSale(id: number, user: AuthUserPayload, dto: SignSaleDto) {
@@ -768,6 +955,7 @@ export class SalesService {
     };
 
     if (this.googleDrive.isEnabled()) {
+      this.logger.log(`Firma venta #${sale.id}: subiendo documentos a Drive`);
       try {
         const driveInfo = await this.googleDrive.uploadSaleDocuments({
           saleId: sale.id,
@@ -794,6 +982,7 @@ export class SalesService {
                 : 'application/octet-stream';
             docs.push(doc);
           }
+          doc.name = file.name;
           doc.driveFileId = file.id;
           doc.driveFileUrl = file.url;
           // Firma y ticket se conservan en BD (pesos bajos) para vista previa PDF.
@@ -812,9 +1001,13 @@ export class SalesService {
         sale.driveFolderPath = driveInfo.folderName;
         sale.status = SaleStatus.COMPLETED;
         await this.salesRepository.save(sale);
+        this.logger.log(
+          `Firma venta #${sale.id}: Drive OK (${driveInfo.files.length} archivos)`,
+        );
       } catch (e) {
         this.logger.error(
           `Drive venta #${sale.id}: ${(e as Error).message}`,
+          (e as Error).stack,
         );
         throw new BadRequestException(
           `No se pudo subir a Drive: ${(e as Error).message}. Intenta firmar de nuevo.`,
@@ -845,7 +1038,13 @@ export class SalesService {
       details: { after: saleToAuditSnapshot(full) },
     });
 
-    return saleToPublic(full);
+    const odooSync = await this.syncReceptionToOdoo(sale.id);
+    const synced = (await this.salesRepository.findById(id))!;
+
+    return {
+      ...saleToPublic(synced),
+      odooSyncError: odooSync.error ?? null,
+    };
   }
 
   async deleteDraft(id: number, user: AuthUserPayload) {

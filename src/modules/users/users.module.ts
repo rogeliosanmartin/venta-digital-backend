@@ -2,11 +2,15 @@ import { Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { UsersService } from './users.service';
 import { UsersController } from './users.controller';
+import { SellerDefaultsController } from './seller-defaults.controller';
 import { User } from './entities/user.entity';
 import { Permission } from './entities/permission.entity';
 import { UserPermission } from './entities/user-permission.entity';
 import { RefreshToken } from './entities/refresh-token.entity';
+import { SellerDefault } from './entities/seller-default.entity';
+import { SellerDefaultPlan } from './entities/seller-default-plan.entity';
 import { UsersRepository } from './repositories/users.repository';
+import { SellerDefaultsRepository } from './repositories/seller-defaults.repository';
 import { PermissionsRepository } from './repositories/permissions.repository';
 import { UserPermissionsRepository } from './repositories/user-permissions.repository';
 import { RefreshTokensRepository } from './repositories/refresh-tokens.repository';
@@ -17,6 +21,7 @@ const repositories = [
   PermissionsRepository,
   UserPermissionsRepository,
   RefreshTokensRepository,
+  SellerDefaultsRepository,
 ];
 
 @Module({
@@ -26,10 +31,12 @@ const repositories = [
       Permission,
       UserPermission,
       RefreshToken,
+      SellerDefault,
+      SellerDefaultPlan,
     ]),
     AuditModule,
   ],
-  controllers: [UsersController],
+  controllers: [UsersController, SellerDefaultsController],
   providers: [UsersService, ...repositories],
   exports: [UsersService, ...repositories],
 })

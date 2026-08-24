@@ -67,10 +67,31 @@ export class SaleBeneficiaryDto extends SalePersonDto {
   @IsOptional() @IsString() fechaNacimiento?: string;
 }
 
+export class SaleDerechohabientesDto {
+  @IsOptional()
+  @ValidateNested()
+  @Type(() => SaleBeneficiaryDto)
+  titularSustituto?: SaleBeneficiaryDto;
+
+  @IsOptional()
+  @ValidateNested()
+  @Type(() => SaleBeneficiaryDto)
+  primerBeneficiario?: SaleBeneficiaryDto;
+
+  @IsOptional()
+  @ValidateNested()
+  @Type(() => SaleBeneficiaryDto)
+  segundoBeneficiario?: SaleBeneficiaryDto;
+}
+
 export class SaleMetaDto {
   @IsOptional() @IsString() fecha?: string;
   @IsOptional() @IsString() contrato?: string;
   @IsOptional() @IsString() origenVenta?: string;
+  @IsOptional() @Type(() => Number) @IsInt() branchId?: number | null;
+  @IsOptional() @IsString() branchName?: string;
+  @IsOptional() @Type(() => Number) @IsInt() serviceTypeId?: number | null;
+  @IsOptional() @IsString() serviceTypeName?: string;
   @IsOptional() @IsString() folioSolicitud?: string;
   @IsOptional() @IsString() fechaServicio?: string;
   @IsOptional() @IsString() estatus?: string;
@@ -105,6 +126,17 @@ export class SalePlanDto {
   })
   @IsBoolean()
   preasignacion?: boolean;
+
+  /** product.template.without_interest — plan sin intereses (solo UI/cálculo financiero). */
+  @IsOptional()
+  @Transform(({ value }) => {
+    if (typeof value === 'boolean') return value;
+    if (value == null || value === '') return false;
+    const t = String(value).trim().toLowerCase();
+    return ['true', '1', 'si', 'sí', 'yes'].includes(t);
+  })
+  @IsBoolean()
+  withoutInterest?: boolean;
 }
 
 export class SalePagoDto {
@@ -136,6 +168,10 @@ export class SaleFormPayloadDto {
   @ValidateNested({ each: true })
   @Type(() => SaleBeneficiaryDto)
   beneficiarios?: SaleBeneficiaryDto[];
+  @IsOptional()
+  @ValidateNested()
+  @Type(() => SaleDerechohabientesDto)
+  derechohabientes?: SaleDerechohabientesDto;
   @IsOptional() @ValidateNested() @Type(() => SalePlanDto) ubicacionPlan?: SalePlanDto;
   @IsOptional() @ValidateNested() @Type(() => SalePagoDto) pago?: SalePagoDto;
   @IsOptional()

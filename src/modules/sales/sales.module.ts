@@ -10,12 +10,14 @@ import { GoogleDriveService } from './google-drive.service';
 import { Sale } from './entities/sale.entity';
 import { SaleHolder } from './entities/sale-holder.entity';
 import { SaleSecondContact } from './entities/sale-second-contact.entity';
+import { SaleSubstituteHolder } from './entities/sale-substitute-holder.entity';
 import { SaleBeneficiary } from './entities/sale-beneficiary.entity';
 import { SaleDocument } from './entities/sale-document.entity';
 import { UsersModule } from '../users/users.module';
 import { AuditModule } from '../audit/audit.module';
 import { SettingsModule } from '../settings/settings.module';
 import { DiscountsModule } from '../discounts/discounts.module';
+import { OdooModule } from '../odoo/odoo.module';
 
 @Module({
   imports: [
@@ -23,6 +25,7 @@ import { DiscountsModule } from '../discounts/discounts.module';
       Sale,
       SaleHolder,
       SaleSecondContact,
+      SaleSubstituteHolder,
       SaleBeneficiary,
       SaleDocument,
     ]),
@@ -30,6 +33,7 @@ import { DiscountsModule } from '../discounts/discounts.module';
     AuditModule,
     SettingsModule,
     DiscountsModule,
+    OdooModule,
   ],
   controllers: [SalesController, DriveController, IntegrationsController],
   providers: [SalesService, SalesRepository, GoogleDriveService, ApiKeyGuard],

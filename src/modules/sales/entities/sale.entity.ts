@@ -12,6 +12,7 @@ import { SaleStatus } from '../enums/sale-status.enum';
 import { PlanKind } from '../enums/plan-kind.enum';
 import { SaleHolder } from './sale-holder.entity';
 import { SaleSecondContact } from './sale-second-contact.entity';
+import { SaleSubstituteHolder } from './sale-substitute-holder.entity';
 import { SaleBeneficiary } from './sale-beneficiary.entity';
 import { SaleDocument } from './sale-document.entity';
 
@@ -51,6 +52,20 @@ export class Sale {
   @Column({ name: 'origen_venta', type: 'varchar', length: 80, default: '' })
   origenVenta!: string;
 
+  /** Sucursal Odoo (`sale.order.branch` / sale.order.branch_id). */
+  @Column({ name: 'branch_id', type: 'int', nullable: true })
+  branchId!: number | null;
+
+  @Column({ name: 'branch_name', type: 'varchar', length: 180, default: '' })
+  branchName!: string;
+
+  /** Tipo de servicio Odoo (`service.type` / sale.order.service_type_id). */
+  @Column({ name: 'service_type_id', type: 'int', nullable: true })
+  serviceTypeId!: number | null;
+
+  @Column({ name: 'service_type_name', type: 'varchar', length: 180, default: '' })
+  serviceTypeName!: string;
+
   /** Folio de solicitud = id de la venta (se sincroniza al guardar). */
   @Column({ name: 'folio_solicitud', type: 'varchar', length: 80, default: '' })
   folioSolicitud!: string;
@@ -82,9 +97,13 @@ export class Sale {
   @Column({ name: 'odoo_partner_id', type: 'int', nullable: true })
   odooPartnerId!: number | null;
 
-  /** Id sale.order en Odoo (cotización generada desde Conciliación) */
+  /** Id sale.order en Odoo (cotización generada desde Mesa de Control) */
   @Column({ name: 'odoo_sale_order_id', type: 'int', nullable: true })
   odooSaleOrderId!: number | null;
+
+  /** True cuando el expediente virtual ya fue guardado en Odoo. */
+  @Column({ name: 'odoo_reception_synced', type: 'boolean', default: false })
+  odooReceptionSynced!: boolean;
 
   /** Referencia interna Odoo (`default_code`) — solo informativo */
   @Column({ name: 'product_default_code', type: 'varchar', length: 80, default: '' })
@@ -122,6 +141,10 @@ export class Sale {
   /** Bandera: si es true, aplica ubicación (parque/sección/cuadrante/número) */
   @Column({ type: 'boolean', default: false })
   preasignacion!: boolean;
+
+  /** Plan Odoo sin intereses (product.template.without_interest). */
+  @Column({ name: 'without_interest', type: 'boolean', default: false })
+  withoutInterest!: boolean;
 
   // —— Pago (se llena en paso aparte) ——
   @Column({ name: 'precio_plan', type: 'varchar', length: 40, default: '' })
@@ -207,6 +230,9 @@ export class Sale {
 
   @OneToOne(() => SaleSecondContact, (c) => c.sale, { cascade: true })
   secondContact!: SaleSecondContact | null;
+
+  @OneToOne(() => SaleSubstituteHolder, (sh) => sh.sale, { cascade: true })
+  substituteHolder!: SaleSubstituteHolder | null;
 
   @OneToMany(() => SaleBeneficiary, (b) => b.sale, {
     cascade: true,

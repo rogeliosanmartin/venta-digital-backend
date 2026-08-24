@@ -24,7 +24,8 @@ export class OdooController {
   @Roles(UserType.VENDEDOR, UserType.MONITOR, UserType.ADMIN)
   searchPlanes(
     @Query('planKind') planKind: string,
-    @Query('q') q: string,
+    @Query('q') q?: string,
+    @Query('ids') ids?: string,
     @Query('limit') limit?: string,
   ) {
     const kind = (planKind || '').trim().toUpperCase();
@@ -34,14 +35,33 @@ export class OdooController {
         'planKind debe ser PARQUE o PLAN_FUTURO',
       );
     }
+    const parsedIds = (ids || '')
+      .split(',')
+      .map((value) => Number(value.trim()))
+      .filter((id) => Number.isFinite(id) && id > 0);
+    if (parsedIds.length) {
+      return this.odoo.getPlanesByIds(companyId, parsedIds);
+    }
     if (!(q || '').trim()) {
-      throw new BadRequestException('Indica el texto a buscar (q)');
+      throw new BadRequestException('Indica el texto a buscar (q) o ids');
     }
     return this.odoo.searchPlanes(
       companyId,
-      q.trim(),
+      q!.trim(),
       limit ? Number(limit) : 20,
     );
+  }
+
+  @Get('sucursales')
+  @Roles(UserType.VENDEDOR, UserType.MONITOR, UserType.ADMIN)
+  listSucursales() {
+    return this.odoo.listBranches();
+  }
+
+  @Get('tipos-servicio')
+  @Roles(UserType.VENDEDOR, UserType.MONITOR, UserType.ADMIN)
+  listTiposServicio() {
+    return this.odoo.listServiceTypes();
   }
 
   @Get('ubicaciones/parques')

@@ -14,6 +14,7 @@ import { AuditLog } from './modules/audit/entities/audit-log.entity';
 import { Sale } from './modules/sales/entities/sale.entity';
 import { SaleHolder } from './modules/sales/entities/sale-holder.entity';
 import { SaleSecondContact } from './modules/sales/entities/sale-second-contact.entity';
+import { SaleSubstituteHolder } from './modules/sales/entities/sale-substitute-holder.entity';
 import { SaleBeneficiary } from './modules/sales/entities/sale-beneficiary.entity';
 import { SaleDocument } from './modules/sales/entities/sale-document.entity';
 import { SettingsModule } from './modules/settings/settings.module';
@@ -21,6 +22,9 @@ import { AppSettings } from './modules/settings/entities/app-settings.entity';
 import { OdooModule } from './modules/odoo/odoo.module';
 import { DiscountsModule } from './modules/discounts/discounts.module';
 import { DiscountGrant } from './modules/discounts/entities/discount-grant.entity';
+import { SellerDefault } from './modules/users/entities/seller-default.entity';
+import { SellerDefaultPlan } from './modules/users/entities/seller-default-plan.entity';
+import { TruncatingTypeOrmLogger } from './database/truncating-typeorm.logger';
 
 @Module({
   imports: [
@@ -47,15 +51,21 @@ import { DiscountGrant } from './modules/discounts/entities/discount-grant.entit
           Sale,
           SaleHolder,
           SaleSecondContact,
+          SaleSubstituteHolder,
           SaleBeneficiary,
           SaleDocument,
           AppSettings,
           DiscountGrant,
+          SellerDefault,
+          SellerDefaultPlan,
         ],
         // Solo beta: crea/ajusta esquema de esta BD. No usar en producción.
         synchronize: config.get<string>('DB_SYNC') === 'true',
-        // Activar solo para depurar: DB_LOGGING=true
         logging: config.get<string>('DB_LOGGING') === 'true',
+        logger:
+          config.get<string>('DB_LOGGING') === 'true'
+            ? new TruncatingTypeOrmLogger()
+            : undefined,
       }),
     }),
     AuthModule,

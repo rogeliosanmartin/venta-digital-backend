@@ -47,14 +47,12 @@ async function main() {
   const redirectUri =
     process.env.GOOGLE_OAUTH_REDIRECT_URI?.trim() ||
     'http://localhost:3022/api/drive/oauth/callback';
-  const tokenPath = path.resolve(
-    process.cwd(),
-    process.env.GOOGLE_OAUTH_TOKEN_PATH || 'secrets/google-oauth-token.json',
-  );
-
-  const tokens = JSON.parse(fs.readFileSync(tokenPath, 'utf8'));
+  const refreshToken = process.env.GOOGLE_OAUTH_REFRESH_TOKEN?.trim();
+  if (!refreshToken) {
+    throw new Error('Falta GOOGLE_OAUTH_REFRESH_TOKEN en el .env');
+  }
   const oauth2 = new google.auth.OAuth2(clientId, clientSecret, redirectUri);
-  oauth2.setCredentials(tokens);
+  oauth2.setCredentials({ refresh_token: refreshToken });
   const drive = google.drive({ version: 'v3', auth: oauth2 });
 
   const about = await drive.about.get({ fields: 'user' });

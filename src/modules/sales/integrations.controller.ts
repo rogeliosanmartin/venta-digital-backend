@@ -10,6 +10,8 @@ import {
 import { ApiKeyGuard } from '../../common/guards/api-key.guard';
 import { SetOdooPartnerDto } from './dto/set-odoo-partner.dto';
 import { SetOdooSaleOrderDto } from './dto/set-odoo-sale-order.dto';
+import { OdooRejectSaleDto } from './dto/odoo-reject-sale.dto';
+import { OdooClearSaleOrderDto } from './dto/odoo-clear-sale-order.dto';
 import { SalesService } from './sales.service';
 
 /**
@@ -21,7 +23,7 @@ import { SalesService } from './sales.service';
 export class IntegrationsController {
   constructor(private readonly salesService: SalesService) {}
 
-  /** Listado liviano para Conciliación. */
+  /** Listado liviano para integraciones Odoo (legacy). */
   @Get('sales')
   conciliationSales() {
     return this.salesService.listForConciliation();
@@ -48,15 +50,30 @@ export class IntegrationsController {
     @Param('id', ParseIntPipe) id: number,
     @Body() dto: SetOdooSaleOrderDto,
   ) {
-    return this.salesService.setOdooSaleOrder(id, dto.odooSaleOrderId);
+    return this.salesService.setOdooSaleOrder(
+      id,
+      dto.odooSaleOrderId,
+      dto.contrato,
+    );
   }
 
   /**
-   * Rechaza la venta en Venta Digital (estatus REJECTED).
-   * Solo si aún no tiene cotización Odoo vinculada.
+   * Cancela / rechaza la venta en Venta Digital (estatus REJECTED).
    */
   @Patch('sales/:id/reject')
-  rejectSale(@Param('id', ParseIntPipe) id: number) {
-    return this.salesService.rejectFromOdoo(id);
+  rejectSale(
+    @Param('id', ParseIntPipe) id: number,
+    @Body() dto: OdooRejectSaleDto,
+  ) {
+    return this.salesService.rejectFromOdoo(id, dto.reason);
+  }
+
+  /** Desvincula la cotización Odoo sin cancelar la venta digital. */
+  @Patch('sales/:id/sale-order/clear')
+  clearSaleOrder(
+    @Param('id', ParseIntPipe) id: number,
+    @Body() dto: OdooClearSaleOrderDto,
+  ) {
+    return this.salesService.clearOdooSaleOrderFromOdoo(id, dto.reason);
   }
 }

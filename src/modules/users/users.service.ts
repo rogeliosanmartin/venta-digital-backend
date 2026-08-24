@@ -17,6 +17,9 @@ import {
   PERMISSION_CATALOG,
 } from '../../common/constants/permissions.constants';
 import { UsersRepository } from './repositories/users.repository';
+import { SellerDefaultsRepository } from './repositories/seller-defaults.repository';
+import { UpdateSellerDefaultsDto } from './dto/update-seller-defaults.dto';
+import type { SellerDefaultPlanKind } from './entities/seller-default-plan.entity';
 import { PermissionsRepository } from './repositories/permissions.repository';
 import { UserPermissionsRepository } from './repositories/user-permissions.repository';
 import {
@@ -31,6 +34,7 @@ import { AuditEntityType } from '../audit/enums/audit-entity-type.enum';
 export class UsersService implements OnModuleInit {
   constructor(
     private readonly usersRepository: UsersRepository,
+    private readonly sellerDefaultsRepository: SellerDefaultsRepository,
     private readonly permissionsRepository: PermissionsRepository,
     private readonly userPermissionsRepository: UserPermissionsRepository,
     private readonly auditService: AuditService,
@@ -399,6 +403,121 @@ export class UsersService implements OnModuleInit {
     for (const permission of permissions) {
       await this.userPermissionsRepository.assign(user, permission);
     }
+  }
+
+  private normalizeDefaultPlanIds(plans?: Array<{ id: number }>) {
+    const seen = new Set<number>();
+    const out: number[] = [];
+    for (const plan of plans ?? []) {
+      if (!plan?.id || seen.has(plan.id) || out.length >= 3) continue;
+      seen.add(plan.id);
+      out.push(plan.id);
+    }
+    return out;
+  }
+
+  private mapPlanRows(
+    plans: Array<{
+      planKind: SellerDefaultPlanKind;
+      productId: number;
+      sortOrder: number;
+    }>,
+    kind: SellerDefaultPlanKind,
+  ) {
+    return plans
+      .filter((plan) => plan.planKind === kind)
+      .sort((a, b) => a.sortOrder - b.sortOrder)
+      .map((plan) => ({ id: plan.productId }));
+  }
+
+  private toSellerDefaultsView(defaults: {
+    branchId: number | null;
+    branchName: string | null;
+    plans?: Array<{
+      planKind: SellerDefaultPlanKind;
+      productId: number;
+      sortOrder: number;
+    }>;
+  }) {
+    const plans = defaults.plans ?? [];
+    return {
+      defaultBranchId: defaults.branchId ?? null,
+      defaultBranchName: defaults.branchName ?? null,
+      defaultFuturePlans: this.mapPlanRows(plans, 'PLAN_FUTURO'),
+      defaultParkPlans: this.mapPlanRows(plans, 'PARQUE'),
+    };
+  }
+
+  private async requireSeller(userId: number) {
+    const user = await this.usersRepository.findById(userId);
+    if (!user || user.type !== UserType.VENDEDOR) {
+      throw new NotFoundException('Vendedor no encontrado');
+    }
+    return user;
+  }
+
+  private async getOrCreateSellerDefaults(sellerId: number) {
+    const existing = await this.sellerDefaultsRepository.findBySellerId(sellerId);
+    if (existing) return existing;
+    return this.sellerDefaultsRepository.createForSeller(sellerId);
+  }
+
+  async getSellerDefaults(userId: number) {
+    await this.requireSeller(userId);
+    const defaults = await this.sellerDefaultsRepository.findBySellerId(userId);
+    if (!defaults) {
+      return this.toSellerDefaultsView({
+        branchId: null,
+        branchName: null,
+        plans: [],
+      });
+    }
+    return this.toSellerDefaultsView(defaults);
+  }
+
+  async saveSellerDefaults(userId: number, dto: UpdateSellerDefaultsDto) {
+    await this.requireSeller(userId);
+    const defaults = await this.getOrCreateSellerDefaults(userId);
+    const currentPlans = defaults.plans ?? [];
+    defaults.plans = undefined as never;
+
+    if (dto.defaultBranchId === null) {
+      defaults.branchId = null;
+      defaults.branchName = null;
+    } else if (dto.defaultBranchId != null) {
+      defaults.branchId = dto.defaultBranchId;
+      defaults.branchName = (dto.defaultBranchName || '').trim() || null;
+    }
+    await this.sellerDefaultsRepository.save(defaults);
+
+    const nextPlans = currentPlans.map((plan) => ({
+      planKind: plan.planKind,
+      productId: plan.productId,
+      sortOrder: plan.sortOrder,
+    }));
+    const replaceKind = (
+      kind: SellerDefaultPlanKind,
+      incoming?: Array<{ id: number }>,
+    ) => {
+      if (!incoming) return;
+      const kept = nextPlans.filter((plan) => plan.planKind !== kind);
+      const normalized = this.normalizeDefaultPlanIds(incoming).map((id, index) => ({
+        planKind: kind,
+        productId: id,
+        sortOrder: index,
+      }));
+      nextPlans.splice(0, nextPlans.length, ...kept, ...normalized);
+    };
+
+    replaceKind('PLAN_FUTURO', dto.defaultFuturePlans);
+    replaceKind('PARQUE', dto.defaultParkPlans);
+
+    if (dto.defaultFuturePlans || dto.defaultParkPlans) {
+      await this.sellerDefaultsRepository.replacePlans(defaults.id, nextPlans);
+    }
+
+    const fresh = await this.sellerDefaultsRepository.findBySellerId(userId);
+    return this.toSellerDefaultsView(fresh ?? defaults);
   }
 
   private toPublic(user: User) {

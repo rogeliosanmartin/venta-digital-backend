@@ -7,6 +7,7 @@ import { SaleStatus } from '../enums/sale-status.enum';
 const RELATIONS = {
   holder: true,
   secondContact: true,
+  substituteHolder: true,
   beneficiaries: true,
   documents: true,
 };
@@ -39,6 +40,14 @@ export class SalesRepository {
       where: { sellerId },
       relations: RELATIONS,
       order: { updatedAt: 'DESC', beneficiaries: { sortOrder: 'ASC' } },
+    });
+  }
+
+  /** Listado del vendedor: sin documentos ni beneficiarios. */
+  findSummariesBySellerId(sellerId: number): Promise<Sale[]> {
+    return this.repo.find({
+      where: { sellerId },
+      order: { updatedAt: 'DESC' },
     });
   }
 
