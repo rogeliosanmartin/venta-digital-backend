@@ -368,6 +368,7 @@ export class GoogleDriveService {
     const entries: { key: string; label: string }[] = [
       { key: 'ine', label: 'INE' },
       { key: 'comprobanteDomicilio', label: 'Comprobante' },
+      { key: 'constanciaSituacionFiscal', label: 'ConstanciaFiscal' },
       { key: 'ticketPago', label: 'Ticket' },
       { key: 'firmaCliente', label: 'Firma' },
     ];

@@ -225,6 +225,19 @@ export class SalesService {
           'Debes adjuntar INE y comprobante de domicilio',
         );
       }
+      const wantsInvoice =
+        (payload.contacto?.factura || '').trim().toUpperCase() === 'SI';
+      if (wantsInvoice) {
+        const csf = payload.documentos?.constanciaSituacionFiscal;
+        const mime = (csf?.mime || '').toLowerCase();
+        const name = (csf?.name || '').toLowerCase();
+        const isPdf = mime.includes('pdf') || name.endsWith('.pdf');
+        if (!csf || !isPdf) {
+          throw new BadRequestException(
+            'Si el titular requiere factura, adjunta la constancia de situación fiscal en PDF',
+          );
+        }
+      }
     }
   }
 
@@ -851,7 +864,11 @@ export class SalesService {
     sale.nombreJefeVentas = (p.nombreJefeVentas ?? '').trim();
 
     const forma = sale.formaPago.toUpperCase();
-    if (!['EFECTIVO', 'TRANSFERENCIA', 'CHEQUE'].includes(forma)) {
+    if (
+      !['EFECTIVO', 'TRANSFERENCIA', 'CHEQUE', 'TARJETA DEBITO', 'TARJETA CREDITO'].includes(
+        forma,
+      )
+    ) {
       throw new BadRequestException('Indica una forma de pago válida');
     }
 
@@ -893,8 +910,17 @@ export class SalesService {
       if (!sale.banco) {
         throw new BadRequestException('Indica el banco');
       }
-      if (forma === 'TRANSFERENCIA' && !sale.cuenta) {
-        throw new BadRequestException('Indica la cuenta de transferencia');
+      if (
+        (forma === 'TRANSFERENCIA' ||
+          forma === 'TARJETA DEBITO' ||
+          forma === 'TARJETA CREDITO') &&
+        !sale.cuenta
+      ) {
+        throw new BadRequestException(
+          forma.startsWith('TARJETA')
+            ? 'Indica la cuenta de la tarjeta'
+            : 'Indica la cuenta de transferencia',
+        );
       }
       if (forma === 'CHEQUE') {
         sale.cuenta = '';
@@ -995,6 +1021,7 @@ export class SalesService {
     const documentosPayload: Record<string, unknown> = {
       ine: docAtt(DocumentKind.INE),
       comprobanteDomicilio: docAtt(DocumentKind.COMPROBANTE),
+      constanciaSituacionFiscal: docAtt(DocumentKind.CONSTANCIA_FISCAL),
       ticketPago: docAtt(DocumentKind.TICKET_PAGO),
       firmaCliente: dto.firmaCliente,
     };
@@ -1002,6 +1029,7 @@ export class SalesService {
     const driveKeyToKind: Record<string, DocumentKind> = {
       ine: DocumentKind.INE,
       comprobanteDomicilio: DocumentKind.COMPROBANTE,
+      constanciaSituacionFiscal: DocumentKind.CONSTANCIA_FISCAL,
       ticketPago: DocumentKind.TICKET_PAGO,
       firmaCliente: DocumentKind.FIRMA,
       caratulaPdf: DocumentKind.CARATULA,

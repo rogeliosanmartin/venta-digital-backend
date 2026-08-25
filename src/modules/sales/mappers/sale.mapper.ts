@@ -239,6 +239,7 @@ export function saleToPayload(sale: Sale): Record<string, unknown> {
     documentos: {
       ine: findDoc(DocumentKind.INE),
       comprobanteDomicilio: findDoc(DocumentKind.COMPROBANTE),
+      constanciaSituacionFiscal: findDoc(DocumentKind.CONSTANCIA_FISCAL),
       firmaCliente: findDoc(DocumentKind.FIRMA),
       ticketPago: findDoc(DocumentKind.TICKET_PAGO),
       caratulaPdf: findDoc(DocumentKind.CARATULA),
@@ -314,6 +315,9 @@ export function saleToAuditSnapshot(sale: Sale): Record<string, unknown> {
   if (docs.some((d) => d.kind === DocumentKind.INE)) docLabels.push('INE');
   if (docs.some((d) => d.kind === DocumentKind.COMPROBANTE)) {
     docLabels.push('Comprobante de domicilio');
+  }
+  if (docs.some((d) => d.kind === DocumentKind.CONSTANCIA_FISCAL)) {
+    docLabels.push('Constancia de situación fiscal');
   }
   if (docs.some((d) => d.kind === DocumentKind.FIRMA)) {
     docLabels.push('Firma');
@@ -592,6 +596,12 @@ export function applyPayloadToSale(sale: Sale, payload: SaleFormPayloadDto) {
   };
   pushDoc(DocumentKind.INE, payload.documentos?.ine);
   pushDoc(DocumentKind.COMPROBANTE, payload.documentos?.comprobanteDomicilio);
+  if (s(c.factura).toUpperCase() === 'SI') {
+    pushDoc(
+      DocumentKind.CONSTANCIA_FISCAL,
+      payload.documentos?.constanciaSituacionFiscal,
+    );
+  }
   pushDoc(DocumentKind.FIRMA, payload.documentos?.firmaCliente);
   pushDoc(DocumentKind.TICKET_PAGO, payload.documentos?.ticketPago);
   sale.documents = docs;

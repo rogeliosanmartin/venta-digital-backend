@@ -182,6 +182,7 @@ export class SaleFormPayloadDto {
   documentos?: {
     ine?: SaleAttachmentDto | null;
     comprobanteDomicilio?: SaleAttachmentDto | null;
+    constanciaSituacionFiscal?: SaleAttachmentDto | null;
     firmaCliente?: SaleAttachmentDto | null;
     ticketPago?: SaleAttachmentDto | null;
   };
