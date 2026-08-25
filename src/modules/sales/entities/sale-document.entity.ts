@@ -10,6 +10,7 @@ import { Sale } from './sale.entity';
 import { DocumentKind } from '../enums/document-kind.enum';
 
 @Entity({ name: 'sale_documents' })
+@Index('IDX_sale_documents_sale_kind', ['saleId', 'kind'])
 export class SaleDocument {
   @PrimaryGeneratedColumn()
   id!: number;

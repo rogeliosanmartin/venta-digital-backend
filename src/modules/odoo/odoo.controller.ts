@@ -2,6 +2,8 @@ import {
   BadRequestException,
   Controller,
   Get,
+  Param,
+  ParseIntPipe,
   Query,
   UseGuards,
 } from '@nestjs/common';
@@ -50,6 +52,21 @@ export class OdooController {
       q!.trim(),
       limit ? Number(limit) : 20,
     );
+  }
+
+  @Get('clientes')
+  @Roles(UserType.VENDEDOR, UserType.MONITOR, UserType.ADMIN)
+  searchClientes(@Query('q') q?: string, @Query('limit') limit?: string) {
+    if (!(q || '').trim()) {
+      throw new BadRequestException('Indica el nombre del cliente (q)');
+    }
+    return this.odoo.searchClientes(q!.trim(), limit ? Number(limit) : 20);
+  }
+
+  @Get('clientes/:id')
+  @Roles(UserType.VENDEDOR, UserType.MONITOR, UserType.ADMIN)
+  getCliente(@Param('id', ParseIntPipe) id: number) {
+    return this.odoo.getCliente(id);
   }
 
   @Get('sucursales')

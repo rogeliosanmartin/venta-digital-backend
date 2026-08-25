@@ -2,11 +2,13 @@ import {
   Body,
   Controller,
   Delete,
+  ForbiddenException,
   Get,
   Param,
   ParseIntPipe,
   Patch,
   Post,
+  Query,
   UseGuards,
 } from '@nestjs/common';
 import { AuthGuard } from '@nestjs/passport';
@@ -16,7 +18,6 @@ import {
   AuthUserPayload,
 } from '../../common/decorators/current-user.decorator';
 import { Roles } from '../../common/decorators/roles.decorator';
-import { RequirePermissions } from '../../common/decorators/permissions.decorator';
 import { RolesGuard } from '../../common/guards/roles.guard';
 import { PermissionsGuard } from '../../common/guards/permissions.guard';
 import { UserType } from '../../common/enums/user-type.enum';
@@ -32,23 +33,30 @@ import {
 export class SalesController {
   constructor(private readonly salesService: SalesService) {}
 
-  @Get('mias')
-  @Roles(UserType.VENDEDOR)
-  mySales(@CurrentUser() user: AuthUserPayload) {
-    return this.salesService.listOwnSales(user.userId);
-  }
-
-  @Get('referencias')
-  @Roles(UserType.VENDEDOR)
-  references(@CurrentUser() user: AuthUserPayload) {
-    return this.salesService.listReferences(user.userId);
-  }
-
-  @Get('todas')
-  @Roles(UserType.MONITOR, UserType.ADMIN)
-  @RequirePermissions(PermissionCode.VENTAS_VER)
-  allSales() {
+  /** Listado: el JWT define el alcance (vendedor = propias, mesa = global). */
+  @Get()
+  @Roles(UserType.VENDEDOR, UserType.MONITOR, UserType.ADMIN)
+  list(@CurrentUser() user: AuthUserPayload) {
+    if (user.type === UserType.VENDEDOR) {
+      return this.salesService.listOwnSales(user.userId);
+    }
+    if (
+      user.type !== UserType.ADMIN &&
+      !user.permissions.includes(PermissionCode.VENTAS_VER)
+    ) {
+      throw new ForbiddenException('No tiene permisos suficientes');
+    }
     return this.salesService.listAllSales();
+  }
+
+  /** Busca ventas de cualquier vendedor para precargar titular / contactos. */
+  @Get('reuse')
+  @Roles(UserType.VENDEDOR)
+  reuse(@Query('q') q?: string, @Query('limit') limit?: string) {
+    return this.salesService.searchReferences(
+      q,
+      limit ? Number(limit) : 20,
+    );
   }
 
   @Get(':id')

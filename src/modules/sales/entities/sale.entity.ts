@@ -21,6 +21,8 @@ import { SaleDocument } from './sale-document.entity';
  * Campos tipados — sin JSON de formulario.
  */
 @Entity({ name: 'sales' })
+@Index('IDX_sales_seller_updated', ['sellerId', 'updatedAt'])
+@Index('IDX_sales_status_updated', ['status', 'updatedAt'])
 export class Sale {
   @PrimaryGeneratedColumn()
   id!: number;

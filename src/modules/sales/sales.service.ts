@@ -26,6 +26,7 @@ import {
   applyPayloadToSale,
   computeSaldo,
   fullName,
+  realContrato,
   saleToAuditSnapshot,
   saleToPayload,
   saleToPublic,
@@ -38,6 +39,7 @@ import { SettingsService } from '../settings/settings.service';
 import { DiscountsService } from '../discounts/discounts.service';
 import { OdooGsmClient } from '../odoo/odoo-gsm.client';
 import { PlanKind } from './enums/plan-kind.enum';
+import { stampContratoOnCaratulaPdf } from './utils/stamp-caratula-contrato';
 
 @Injectable()
 export class SalesService {
@@ -86,13 +88,11 @@ export class SalesService {
   }
 
   /** Folio de solicitud = id de venta (consecutivo natural de la tabla). */
-  private async syncFolioSolicitud(saleId: number) {
-    const sale = await this.salesRepository.findById(saleId);
-    if (!sale) return;
-    const folio = String(saleId);
+  private async syncFolioSolicitud(sale: Sale) {
+    const folio = String(sale.id);
     if (sale.folioSolicitud === folio) return;
     sale.folioSolicitud = folio;
-    await this.salesRepository.save(sale);
+    await this.salesRepository.saveWithoutDocuments(sale);
   }
 
   /** Aparta park.space en Odoo cuando la venta tiene preasignación de parque. */
@@ -149,11 +149,10 @@ export class SalesService {
     try {
       await this.ensureCaratulaFromDrive(sale);
       await this.hydrateAllDocuments(sale);
-      const fresh = (await this.salesRepository.findById(saleId))!;
-      const payload = saleToPublic(fresh);
+      const payload = saleToPublic(sale);
       await this.odooGsm.syncVdReception(payload as unknown as Record<string, unknown>);
-      fresh.odooReceptionSynced = true;
-      await this.salesRepository.save(fresh);
+      sale.odooReceptionSynced = true;
+      await this.salesRepository.saveWithoutDocuments(sale);
       this.logger.log(`Expediente Odoo sincronizado para venta #${saleId}`);
       return { synced: true };
     } catch (e) {
@@ -265,7 +264,7 @@ export class SalesService {
     const items = await this.salesRepository.findForMonitor();
     return {
       scope: 'all' as const,
-      items: items.map(saleToPublic),
+      items: items.map(saleToListItem),
       total: items.length,
       message:
         items.length === 0
@@ -289,7 +288,7 @@ export class SalesService {
         titularName: s.titularName,
         odooPartnerId: s.odooPartnerId ?? null,
         odooSaleOrderId: s.odooSaleOrderId ?? null,
-        contrato: s.contrato ?? '',
+        contrato: realContrato(s.contrato),
         nombrePlan: s.nombrePlan ?? '',
         productDefaultCode: s.productDefaultCode ?? '',
         precioPlan: s.precioPlan ?? '',
@@ -303,25 +302,25 @@ export class SalesService {
     };
   }
 
-  async listReferences(sellerId: number) {
+  async searchReferences(q?: string, limit = 20) {
+    const term = (q || '').trim();
+    if (term.length < 3) {
+      throw new BadRequestException(
+        'Indica al menos 3 caracteres para buscar el cliente',
+      );
+    }
     await this.purgeExpired();
-    const items = await this.salesRepository.findBySellerId(sellerId);
-    const now = Date.now();
-    return items
-      .filter((s) => {
-        if (s.status === SaleStatus.DRAFT) {
-          return s.draftExpiresAt ? s.draftExpiresAt.getTime() > now : true;
-        }
-        return true;
-      })
-      .map((s) => ({
-        id: s.id,
-        status: s.status,
-        titularName: s.titularName,
-        amount: Number(s.amount) || 0,
-        updatedAt: s.updatedAt.toISOString(),
-        payload: saleToPayload(s),
-      }));
+    const items = await this.salesRepository.searchReferencesByName(term, limit);
+    return items.map((s) => ({
+      id: s.id,
+      sellerId: s.sellerId,
+      sellerName: s.sellerName,
+      status: s.status,
+      titularName: s.titularName,
+      amount: Number(s.amount) || 0,
+      updatedAt: s.updatedAt.toISOString(),
+      payload: saleToPayload(s),
+    }));
   }
 
   /**
@@ -342,7 +341,7 @@ export class SalesService {
 
     firma.dataBase64 = downloaded.dataBase64;
     if (downloaded.mime) firma.mime = downloaded.mime;
-    await this.salesRepository.save(sale);
+    await this.salesRepository.saveDocument(firma);
   }
 
   /** Ventas ya firmadas: la carátula está en Drive pero no quedó en sale_documents. */
@@ -365,14 +364,14 @@ export class SalesService {
     doc.driveFileId = found.id;
     doc.driveFileUrl = found.url;
     doc.dataBase64 = null;
+    doc.saleId = sale.id;
     sale.documents = [...(sale.documents ?? []), doc];
-    await this.salesRepository.save(sale);
+    await this.salesRepository.saveDocument(doc);
   }
 
-  /** Recupera base64 de todos los adjuntos faltantes (p. ej. para Odoo). */
+  /** Recupera base64 de adjuntos faltantes en memoria (no reescribe la BD). */
   private async hydrateAllDocuments(sale: Sale) {
     if (!this.googleDrive.isEnabled()) return;
-    let changed = false;
     for (const doc of sale.documents ?? []) {
       if (doc.dataBase64?.trim() || !doc.driveFileId) continue;
       const downloaded = await this.googleDrive.downloadFileBase64(
@@ -381,10 +380,6 @@ export class SalesService {
       if (!downloaded) continue;
       doc.dataBase64 = downloaded.dataBase64;
       if (downloaded.mime) doc.mime = downloaded.mime;
-      changed = true;
-    }
-    if (changed) {
-      await this.salesRepository.save(sale);
     }
   }
 
@@ -411,7 +406,7 @@ export class SalesService {
   /** Detalle completo para Conciliación Odoo (payload + archivos). */
   async getOneForOdoo(id: number) {
     await this.purgeExpired();
-    const sale = await this.salesRepository.findById(id);
+    const sale = await this.salesRepository.findByIdWithFiles(id);
     if (!sale) throw new NotFoundException('Venta no encontrada');
     await this.ensureCaratulaFromDrive(sale);
     await this.hydrateAllDocuments(sale);
@@ -424,7 +419,7 @@ export class SalesService {
     const sale = await this.salesRepository.findById(id);
     if (!sale) throw new NotFoundException('Venta no encontrada');
     sale.odooPartnerId = odooPartnerId;
-    await this.salesRepository.save(sale);
+    await this.salesRepository.saveWithoutDocuments(sale);
     return {
       id: sale.id,
       odooPartnerId: sale.odooPartnerId,
@@ -465,7 +460,7 @@ export class SalesService {
     const before = saleToAuditSnapshot(sale);
     sale.status = SaleStatus.REJECTED;
     sale.odooSaleOrderId = null;
-    await this.salesRepository.save(sale);
+    await this.salesRepository.saveWithoutDocuments(sale);
 
     const titular =
       sale.titularName || (sale.holder ? fullName(sale.holder) : '') || 'sin titular';
@@ -521,7 +516,7 @@ export class SalesService {
     const previousOrderId = sale.odooSaleOrderId;
     sale.odooSaleOrderId = null;
     sale.contrato = '';
-    await this.salesRepository.save(sale);
+    await this.salesRepository.saveWithoutDocuments(sale);
 
     const titular =
       sale.titularName || (sale.holder ? fullName(sale.holder) : '') || 'sin titular';
@@ -583,12 +578,76 @@ export class SalesService {
     if (quoteName) {
       sale.contrato = quoteName;
     }
-    await this.salesRepository.save(sale);
+    await this.salesRepository.saveWithoutDocuments(sale);
+    if (quoteName) {
+      await this.refreshCaratulaContratoOnDrive(sale, quoteName);
+    }
     return {
       id: sale.id,
       odooSaleOrderId: sale.odooSaleOrderId,
       contrato: sale.contrato,
     };
+  }
+
+  /**
+   * Tras generar cotización, el folio (`sale.order.name`) debe verse en la
+   * carátula de Drive. Se sella sobre el PDF ya firmado (mismo archivo).
+   */
+  private async refreshCaratulaContratoOnDrive(sale: Sale, contrato: string) {
+    if (!this.googleDrive.isEnabled()) return;
+
+    const existing = (sale.documents ?? []).find(
+      (d) => d.kind === DocumentKind.CARATULA,
+    );
+    let fileId = existing?.driveFileId ?? null;
+    if (!fileId && sale.driveFolderId) {
+      const found = await this.googleDrive.findCaratulaInFolder(
+        sale.driveFolderId,
+        sale.id,
+      );
+      fileId = found?.id ?? null;
+      if (found && !existing) {
+        const doc = new SaleDocument();
+        doc.kind = DocumentKind.CARATULA;
+        doc.name = found.name;
+        doc.mime = 'application/pdf';
+        doc.driveFileId = found.id;
+        doc.driveFileUrl = found.url;
+        doc.dataBase64 = null;
+        doc.saleId = sale.id;
+        await this.salesRepository.saveDocument(doc);
+      }
+    }
+    if (!fileId) {
+      this.logger.warn(
+        `Venta #${sale.id}: cotización ${contrato} sin carátula en Drive; no se actualizó el folio`,
+      );
+      return;
+    }
+
+    try {
+      const downloaded = await this.googleDrive.downloadFileBase64(fileId);
+      if (!downloaded?.dataBase64) {
+        throw new Error('No se pudo descargar la carátula');
+      }
+      const stamped = stampContratoOnCaratulaPdf(
+        Buffer.from(downloaded.dataBase64, 'base64'),
+        contrato,
+      );
+      await this.googleDrive.updateFileBuffer(
+        fileId,
+        'application/pdf',
+        stamped,
+      );
+      this.logger.log(
+        `Venta #${sale.id}: carátula Drive actualizada con contrato ${contrato}`,
+      );
+    } catch (e) {
+      this.logger.error(
+        `Venta #${sale.id}: no se actualizó carátula en Drive — ${(e as Error).message}`,
+        (e as Error).stack,
+      );
+    }
   }
 
   async createDraft(user: AuthUserPayload, dto: UpsertSaleDto) {
@@ -622,10 +681,9 @@ export class SalesService {
     if (dto.titularName?.trim()) sale.titularName = dto.titularName.trim();
 
     const saved = await this.salesRepository.save(sale);
-    await this.syncFolioSolicitud(saved.id);
-    const full = (await this.salesRepository.findById(saved.id))!;
+    await this.syncFolioSolicitud(saved);
     const titular =
-      full.titularName || (full.holder ? fullName(full.holder) : '') || 'sin titular';
+      saved.titularName || (saved.holder ? fullName(saved.holder) : '') || 'sin titular';
 
     await this.auditService.record({
       actor: {
@@ -637,10 +695,10 @@ export class SalesService {
       entityType: AuditEntityType.SALE,
       entityId: saved.id,
       summary: `${seller?.fullName ?? 'Vendedor'} guardó borrador de venta #${saved.id} (${titular})`,
-      details: { after: saleToAuditSnapshot(full) },
+      details: { after: saleToAuditSnapshot(saved) },
     });
 
-    return saleToPublic(full);
+    return saleToPublic(saved);
   }
 
   async updateDraft(id: number, user: AuthUserPayload, dto: UpsertSaleDto) {
@@ -668,8 +726,8 @@ export class SalesService {
     if (dto.titularName?.trim()) sale.titularName = dto.titularName.trim();
     sale.draftExpiresAt = await this.draftExpiry();
     sale.folioSolicitud = String(sale.id);
-    await this.salesRepository.save(sale);
-    return saleToPublic((await this.salesRepository.findById(id))!);
+    const saved = await this.salesRepository.save(sale);
+    return saleToPublic(saved);
   }
 
   /** Finaliza captura → pendiente de pago (sin pago ni firma en el formulario). */
@@ -718,15 +776,14 @@ export class SalesService {
       (sale.holder ? fullName(sale.holder) : sale.titularName);
 
     const saved = await this.salesRepository.save(sale);
-    await this.syncFolioSolicitud(saved.id);
+    await this.syncFolioSolicitud(saved);
 
     try {
-      const withFolio = (await this.salesRepository.findById(saved.id))!;
-      await this.reservePreassignedSpace(withFolio);
+      await this.reservePreassignedSpace(saved);
     } catch (e) {
       saved.status = SaleStatus.DRAFT;
       saved.draftExpiresAt = await this.draftExpiry();
-      await this.salesRepository.save(saved);
+      await this.salesRepository.saveWithoutDocuments(saved);
       throw e;
     }
 
@@ -741,12 +798,11 @@ export class SalesService {
     );
     if (grantId != null) {
       saved.discountGrantId = grantId;
-      await this.salesRepository.save(saved);
+      await this.salesRepository.saveWithoutDocuments(saved);
     }
 
-    const full = (await this.salesRepository.findById(saved.id))!;
     const titular =
-      full.titularName || (full.holder ? fullName(full.holder) : '') || 'sin titular';
+      saved.titularName || (saved.holder ? fullName(saved.holder) : '') || 'sin titular';
 
     await this.auditService.record({
       actor: {
@@ -758,14 +814,13 @@ export class SalesService {
       entityType: AuditEntityType.SALE,
       entityId: saved.id,
       summary: `${seller?.fullName ?? 'Vendedor'} finalizó captura de venta #${saved.id} (${titular})`,
-      details: { after: saleToAuditSnapshot(full) },
+      details: { after: saleToAuditSnapshot(saved) },
     });
 
     const odooSync = await this.syncReceptionToOdoo(saved.id);
-    const synced = (await this.salesRepository.findById(saved.id))!;
-
+    saved.odooReceptionSynced = odooSync.synced;
     return {
-      ...saleToPublic(synced),
+      ...saleToPublic(saved),
       odooSyncError: odooSync.error ?? null,
     };
   }
@@ -873,9 +928,8 @@ export class SalesService {
     sale.status = SaleStatus.PENDING_SIGNATURE;
     await this.salesRepository.save(sale);
 
-    const full = (await this.salesRepository.findById(id))!;
     const titular =
-      full.titularName || (full.holder ? fullName(full.holder) : '') || 'sin titular';
+      sale.titularName || (sale.holder ? fullName(sale.holder) : '') || 'sin titular';
 
     await this.auditService.record({
       actor: {
@@ -887,20 +941,19 @@ export class SalesService {
       entityType: AuditEntityType.SALE,
       entityId: sale.id,
       summary: `${seller?.fullName ?? 'Vendedor'} registró pago de venta #${sale.id} (${titular})`,
-      details: { after: saleToAuditSnapshot(full) },
+      details: { after: saleToAuditSnapshot(sale) },
     });
 
     const odooSync = await this.syncReceptionToOdoo(sale.id);
-    const synced = (await this.salesRepository.findById(id))!;
-
+    sale.odooReceptionSynced = odooSync.synced;
     return {
-      ...saleToPublic(synced),
+      ...saleToPublic(sale),
       odooSyncError: odooSync.error ?? null,
     };
   }
 
   async signSale(id: number, user: AuthUserPayload, dto: SignSaleDto) {
-    const sale = await this.salesRepository.findById(id);
+    const sale = await this.salesRepository.findByIdWithFiles(id);
     if (!sale) throw new NotFoundException('Venta no encontrada');
     this.assertSellerOwns(sale, user.userId);
     if (sale.status !== SaleStatus.PENDING_SIGNATURE) {
@@ -1020,10 +1073,9 @@ export class SalesService {
       await this.salesRepository.save(sale);
     }
 
-    const full = (await this.salesRepository.findById(id))!;
     const seller = await this.usersRepository.findById(user.userId);
     const titular =
-      full.titularName || (full.holder ? fullName(full.holder) : '') || 'sin titular';
+      sale.titularName || (sale.holder ? fullName(sale.holder) : '') || 'sin titular';
 
     await this.auditService.record({
       actor: {
@@ -1035,14 +1087,13 @@ export class SalesService {
       entityType: AuditEntityType.SALE,
       entityId: sale.id,
       summary: `${seller?.fullName ?? 'Vendedor'} firmó venta #${sale.id} (${titular})`,
-      details: { after: saleToAuditSnapshot(full) },
+      details: { after: saleToAuditSnapshot(sale) },
     });
 
     const odooSync = await this.syncReceptionToOdoo(sale.id);
-    const synced = (await this.salesRepository.findById(id))!;
-
+    sale.odooReceptionSynced = odooSync.synced;
     return {
-      ...saleToPublic(synced),
+      ...saleToPublic(sale),
       odooSyncError: odooSync.error ?? null,
     };
   }

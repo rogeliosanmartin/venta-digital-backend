@@ -13,6 +13,13 @@ function s(v: unknown, fallback = ''): string {
   return v == null ? fallback : String(v).trim();
 }
 
+/** Solo el folio de cotización Odoo. Los mocks de captura no cuentan. */
+export function realContrato(v: unknown): string {
+  const t = s(v);
+  if (!t || /^VD-(MOCK|DEMO)-/i.test(t)) return '';
+  return t;
+}
+
 function money(v: unknown): number {
   const n = Number(String(v ?? '').replace(/,/g, '').replace(/[^0-9.-]/g, ''));
   return Number.isFinite(n) ? n : 0;
@@ -98,6 +105,10 @@ export function saleToListItem(sale: Sale) {
     updatedAt: toIso(sale.updatedAt) ?? '',
     driveFolderUrl: sale.driveFolderUrl,
     driveFolderPath: sale.driveFolderPath,
+    precioPlan: sale.precioPlan ?? '',
+    promocionDescuento: sale.promocionDescuento ?? '',
+    anticipo: sale.anticipo ?? '',
+    saldo: sale.saldo ?? '',
     payload: {},
   };
 }
@@ -125,7 +136,7 @@ export function saleToPayload(sale: Sale): Record<string, unknown> {
   return {
     meta: {
       fecha: sale.fecha ?? '',
-      contrato: sale.contrato,
+      contrato: realContrato(sale.contrato),
       origenVenta: sale.origenVenta,
       branchId: sale.branchId,
       branchName: sale.branchName,
@@ -321,7 +332,7 @@ export function saleToAuditSnapshot(sale: Sale): Record<string, unknown> {
     status: sale.status,
     amount: Number(sale.amount) || 0,
     fecha: sale.fecha ?? '',
-    contrato: sale.contrato,
+    contrato: realContrato(sale.contrato),
     origenVenta: sale.origenVenta,
     sucursal: sale.branchName || sale.branchId,
     tipoServicio: sale.serviceTypeName || sale.serviceTypeId,
@@ -392,10 +403,7 @@ export function applyPayloadToSale(sale: Sale, payload: SaleFormPayloadDto) {
   const pago = payload.pago ?? {};
 
   sale.fecha = dateOrNull(meta.fecha);
-  const contrato = s(meta.contrato);
-  if (contrato) {
-    sale.contrato = contrato;
-  }
+  // `contrato` solo lo pone Odoo (Generar cotización). El front no lo captura.
   sale.origenVenta = s(meta.origenVenta);
   sale.branchId = optionalInt(meta.branchId);
   sale.branchName = s(meta.branchName);
@@ -566,8 +574,8 @@ export function applyPayloadToSale(sale: Sale, payload: SaleFormPayloadDto) {
   ) => {
     const prev = existingByKind.get(kind);
     if (!att?.dataBase64) {
-      // Sin binario nuevo: conservar doc ya en Drive o pendiente
-      if (prev && (prev.dataBase64 || prev.driveFileId)) {
+      // Sin binario nuevo: conservar el adjunto ya persistido (id / Drive / base64)
+      if (prev && (prev.id || prev.dataBase64 || prev.driveFileId)) {
         docs.push(prev);
       }
       return;

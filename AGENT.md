@@ -45,11 +45,11 @@ WhatsApp NIP: `API_WHATS` + endpoints `nip` / `nip/validate/:id` (mismo servicio
 - Permisos default:
   - MONITOR → `dashboard.ver`, `ventas.ver`, `reportes.ver`
   - ADMIN → los anteriores + `usuarios.gestionar`
-  - VENDEDOR → sin permisos de menú; accede a `/sales/mias` por rol
-- MONITOR/ADMIN con `ventas.ver` → `GET /api/sales/todas` (ventas enviadas)
+  - VENDEDOR → sin permisos de menú; accede a `GET /sales` por rol
+- MONITOR/ADMIN con `ventas.ver` → `GET /api/sales` (ventas enviadas)
 - Ventas vendedor (`sales` + tablas relacionadas):
-  - `GET /sales/mias` — propias (borradores vigentes + pipeline)
-  - `GET /sales/referencias` — para reutilizar datos
+  - `GET /sales` — listado (propias si vendedor; global si mesa)
+  - `GET /sales/reuse` — para reutilizar datos de captura
   - `POST /sales/drafts` · `PATCH /sales/:id/draft` — borrador (máx. 3, caduca 24 h)
   - `POST /sales/finalize` · `POST /sales/:id/finalize` — captura lista (docs)
   - `PATCH /sales/:id/payment` · `POST /sales/:id/sign` — pago y firma desde lista

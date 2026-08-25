@@ -20,6 +20,63 @@ export type OdooUbicacionOption = {
   status?: string | null;
 };
 
+export type OdooClienteContacto = {
+  apellidoPaterno: string;
+  apellidoMaterno: string;
+  nombres: string;
+  sexo: string;
+  curp: string;
+  factura: string;
+  direccion: string;
+  colonia: string;
+  cp: string;
+  entreCalles: string;
+  senaParticular: string;
+  municipio: string;
+  estado: string;
+  tipoCobranza: string;
+  fechaNacimiento: string;
+  sindicalizado: string;
+  observaciones: string;
+  celular1: string;
+  celular2: string;
+  correo: string;
+  estadoCivil: string;
+  domicilioEntregaDocumentacion: string;
+};
+
+export type OdooClienteSegundo = {
+  apellidoPaterno: string;
+  apellidoMaterno: string;
+  nombres: string;
+  celular: string;
+  parentesco: string;
+  direccion: string;
+  colonia: string;
+  cp: string;
+  entreCalles: string;
+  fechaNacimiento: string;
+  domicilioEntregaDocumentacion: string;
+};
+
+export type OdooClienteBeneficiary = {
+  apellidoPaterno: string;
+  apellidoMaterno: string;
+  nombres: string;
+  parentesco: string;
+  celular: string;
+  fechaNacimiento: string;
+};
+
+export type OdooCliente = {
+  id: number;
+  name: string;
+  contacto: OdooClienteContacto;
+  segundoContacto: OdooClienteSegundo | null;
+  titularSustituto: OdooClienteBeneficiary;
+  beneficiarios: OdooClienteBeneficiary[];
+};
+
 export type OdooReserveSpaceResult = {
   spaceId: number;
   status: string;
@@ -180,6 +237,62 @@ export class OdooGsmClient {
       this.logger.error(`listBranches: ${msg}`);
       throw new ServiceUnavailableException(
         typeof msg === 'string' ? msg : 'Error al consultar sucursales en Odoo',
+      );
+    }
+  }
+
+  async searchClientes(q: string, limit = 20) {
+    if (!this.http) {
+      throw new ServiceUnavailableException(
+        'Búsqueda de clientes no configurada',
+      );
+    }
+    try {
+      const { data } = await this.http.get<OdooCliente[]>('/clientes', {
+        params: { q, limit },
+      });
+      return Array.isArray(data) ? data : [];
+    } catch (e: any) {
+      const status = e?.response?.status;
+      const msg =
+        e?.response?.data?.message ||
+        e?.message ||
+        'No se pudo buscar el cliente';
+      this.logger.error(`searchClientes: ${msg}`);
+      if (status === 400) {
+        throw new BadRequestException(
+          typeof msg === 'string' ? msg : 'Indica el nombre del cliente',
+        );
+      }
+      throw new ServiceUnavailableException(
+        typeof msg === 'string' ? msg : 'No se pudo buscar el cliente',
+      );
+    }
+  }
+
+  async getCliente(id: number) {
+    if (!this.http) {
+      throw new ServiceUnavailableException(
+        'Búsqueda de clientes no configurada',
+      );
+    }
+    try {
+      const { data } = await this.http.get<OdooCliente>(`/clientes/${id}`);
+      return data;
+    } catch (e: any) {
+      const status = e?.response?.status;
+      const msg =
+        e?.response?.data?.message ||
+        e?.message ||
+        'No se pudo leer el cliente';
+      this.logger.error(`getCliente: ${msg}`);
+      if (status === 404 || status === 400) {
+        throw new BadRequestException(
+          typeof msg === 'string' ? msg : 'Cliente no encontrado',
+        );
+      }
+      throw new ServiceUnavailableException(
+        typeof msg === 'string' ? msg : 'No se pudo leer el cliente',
       );
     }
   }

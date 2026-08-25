@@ -281,7 +281,7 @@ Authorization: Bearer <vendedorToken>
 ### 5.2 Listar mis ventas
 
 ```http
-GET /api/sales/mias
+GET /api/sales
 ```
 
 **Respuesta**
@@ -752,7 +752,7 @@ sequenceDiagram
 | POST | `/auth/vendedor/verificar-pin` | — | Token vendedor |
 | POST | `/users` | ADMIN | Crear vendedor |
 | GET | `/users?type=VENDEDOR` | ADMIN | Listar vendedores |
-| GET | `/sales/mias` | VENDEDOR | Mis ventas |
+| GET | `/sales` | VENDEDOR / MONITOR* | Listado (alcance por rol) |
 | GET | `/sales/:id` | VENDEDOR* | Detalle venta |
 | POST | `/sales/drafts` | VENDEDOR | Crear borrador |
 | PATCH | `/sales/:id/draft` | VENDEDOR | Actualizar borrador |

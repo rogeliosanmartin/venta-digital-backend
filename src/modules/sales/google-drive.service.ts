@@ -308,6 +308,29 @@ export class GoogleDriveService {
     };
   }
 
+  /** Reemplaza el contenido de un archivo existente (mismo id / enlace). */
+  async updateFileBuffer(
+    fileId: string,
+    mime: string,
+    buffer: Buffer,
+  ): Promise<{ id: string; name: string; url: string | null }> {
+    if (!this.drive) throw new Error('Drive no configurado');
+    const res = await this.drive.files.update({
+      fileId,
+      media: {
+        mimeType: mime || 'application/octet-stream',
+        body: Readable.from(buffer),
+      },
+      fields: 'id, name, webViewLink',
+      supportsAllDrives: true,
+    });
+    return {
+      id: res.data.id ?? fileId,
+      name: res.data.name ?? '',
+      url: res.data.webViewLink ?? null,
+    };
+  }
+
   /**
    * Crea carpeta por venta y sube INE, comprobante, firma y carátula PDF.
    * El caller (signSale) falla el flujo si esta subida no es exitosa.
