@@ -1,5 +1,5 @@
 import { NestFactory } from '@nestjs/core';
-import { ValidationPipe } from '@nestjs/common';
+import { RequestMethod, ValidationPipe } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { json, urlencoded } from 'express';
 import * as os from 'os';
@@ -21,6 +21,7 @@ function lanIpv4Addresses(): string[] {
 
 async function bootstrap() {
   const app = await NestFactory.create(AppModule, { bodyParser: false });
+  app.enableShutdownHooks();
 
   // Adjuntos (INE / comprobante) viajan en base64 dentro del JSON
   // Fotos de celular ~5 MB c/u → base64 + 2 archivos requiere más margen
@@ -41,7 +42,9 @@ async function bootstrap() {
     }),
   );
 
-  app.setGlobalPrefix('api');
+  app.setGlobalPrefix('api', {
+    exclude: [{ path: 'health', method: RequestMethod.GET }],
+  });
 
   const config = app.get(ConfigService);
   const port = Number(config.get('PORT') ?? 3022);
