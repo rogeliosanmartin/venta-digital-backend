@@ -13,6 +13,42 @@ function s(v: unknown, fallback = ''): string {
   return v == null ? fallback : String(v).trim();
 }
 
+function tipoVentaFromEstatus(estatus: string): string {
+  const key = String(estatus ?? '')
+    .trim()
+    .toUpperCase();
+  if (key === 'REACTIVACION') return 'RECONOCIMIENTO';
+  if (key === 'MEJORA') return 'MEJORA';
+  if (key === 'MINORIA') return 'MINORIA';
+  return 'NUEVA';
+}
+
+function parseReconocimientoVentas(raw: string | null | undefined) {
+  if (!raw?.trim()) return [];
+  try {
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+}
+
+function stringifyReconocimientoVentas(value: unknown): string {
+  if (!Array.isArray(value) || !value.length) return '';
+  return JSON.stringify(value);
+}
+
+function estatusFromTipoVenta(tipo?: string): string | null {
+  const t = String(tipo ?? '')
+    .trim()
+    .toUpperCase();
+  if (t === 'NUEVA') return 'ACTIVO';
+  if (t === 'RECONOCIMIENTO') return 'REACTIVACION';
+  if (t === 'MEJORA') return 'MEJORA';
+  if (t === 'MINORIA') return 'MINORIA';
+  return null;
+}
+
 /** Solo el folio de cotización Odoo. Los mocks de captura no cuentan. */
 export function realContrato(v: unknown): string {
   const t = s(v);
@@ -25,16 +61,29 @@ function money(v: unknown): number {
   return Number.isFinite(n) ? n : 0;
 }
 
-/** Saldo = precio − (precio × % descuento) − anticipo (≥ 0). */
+export function recognizedFromVentas(raw: string | null | undefined): number {
+  const list = parseReconocimientoVentas(raw);
+  return list.reduce((sum, item: any) => {
+    const total = money(item?.amountTotal);
+    const remaining = money(item?.saldo);
+    return sum + Math.max(0, total - remaining);
+  }, 0);
+}
+
+/** Saldo = precio − descuento − anticipo − saldo reconocido (≥ 0). */
 export function computeSaldo(
   precioPlan: unknown,
   descuentoPct: unknown,
   anticipo: unknown,
+  recognizedBalance: unknown = 0,
 ): string {
   const precio = money(precioPlan);
   const pct = Math.min(100, Math.max(0, money(descuentoPct)));
   const descuentoMonto = (precio * pct) / 100;
-  const saldo = Math.max(0, precio - descuentoMonto - money(anticipo));
+  const saldo = Math.max(
+    0,
+    precio - descuentoMonto - money(anticipo) - money(recognizedBalance),
+  );
   return String(Number(saldo.toFixed(2)));
 }
 
@@ -69,6 +118,9 @@ function toIso(value: Date | string | null | undefined): string | null {
 
 /** API pública: entidad tipada + payload ensamblado para el front/PDF. */
 export function saleToPublic(sale: Sale) {
+  const reconocimientoVentas = parseReconocimientoVentas(
+    sale.reconocimientoVentas,
+  );
   return {
     id: sale.id,
     sellerId: sale.sellerId,
@@ -84,6 +136,11 @@ export function saleToPublic(sale: Sale) {
     updatedAt: toIso(sale.updatedAt) ?? '',
     driveFolderUrl: sale.driveFolderUrl,
     driveFolderPath: sale.driveFolderPath,
+    tipoVenta: tipoVentaFromEstatus(sale.estatus),
+    recognizedBalance: recognizedFromVentas(sale.reconocimientoVentas),
+    recognitionOriginIds: reconocimientoVentas
+      .map((item: { id?: number }) => Number(item?.id) || 0)
+      .filter((id: number) => id > 0),
     payload: saleToPayload(sale),
   };
 }
@@ -144,9 +201,11 @@ export function saleToPayload(sale: Sale): Record<string, unknown> {
       serviceTypeName: sale.serviceTypeName,
       folioSolicitud: sale.folioSolicitud || String(sale.id),
       fechaServicio: sale.fechaServicio ?? '',
+      tipoVenta: tipoVentaFromEstatus(sale.estatus),
       estatus: sale.estatus,
       anterior: sale.anterior,
       verificacion: sale.verificacion,
+      reconocimientoVentas: parseReconocimientoVentas(sale.reconocimientoVentas),
     },
     contacto: h
       ? {
@@ -156,6 +215,13 @@ export function saleToPayload(sale: Sale): Record<string, unknown> {
           sexo: h.sexo,
           curp: h.curp,
           factura: h.factura,
+          tipoPersona: h.tipoPersona,
+          razonSocial: h.razonSocial,
+          rfc: h.rfc,
+          facturaCp: h.facturaCp,
+          regimenFiscal: h.regimenFiscal,
+          regimenFiscalOtro: h.regimenFiscalOtro,
+          telefonoFactura: h.telefonoFactura,
           direccion: h.direccion,
           colonia: h.colonia,
           cp: h.cp,
@@ -227,6 +293,16 @@ export function saleToPayload(sale: Sale): Record<string, unknown> {
       formaPago: sale.formaPago,
       cuenta: sale.cuenta,
       banco: sale.banco,
+      cuentaPago: sale.cuentaPago,
+      bancoPago: sale.bancoPago,
+      vencimientoTarjeta: sale.vencimientoTarjeta,
+      titularTarjeta: sale.titularTarjeta,
+      cvv: sale.cvv,
+      numeroEmpleado: sale.numeroEmpleado,
+      nombreEmpleado: sale.nombreEmpleado,
+      empresaNomina: sale.empresaNomina,
+      empresaNominaId: sale.empresaNominaId,
+      infoNomina: sale.infoNomina,
       montoRecibido: sale.montoRecibido,
       cambio: sale.cambio,
       nombreJefeVentas: sale.nombreJefeVentas,
@@ -240,9 +316,17 @@ export function saleToPayload(sale: Sale): Record<string, unknown> {
       ine: findDoc(DocumentKind.INE),
       comprobanteDomicilio: findDoc(DocumentKind.COMPROBANTE),
       constanciaSituacionFiscal: findDoc(DocumentKind.CONSTANCIA_FISCAL),
+      tarjetaFrente: findDoc(DocumentKind.TARJETA_FRENTE),
+      tarjetaReverso: findDoc(DocumentKind.TARJETA_REVERSO),
+      tarjetaPdf: findDoc(DocumentKind.TARJETA),
       firmaCliente: findDoc(DocumentKind.FIRMA),
       ticketPago: findDoc(DocumentKind.TICKET_PAGO),
+      comprobanteTransferencia: findDoc(DocumentKind.COMP_TRANSFERENCIA),
       caratulaPdf: findDoc(DocumentKind.CARATULA),
+      cartaFacturaPdf: findDoc(DocumentKind.CARTA_FACTURA),
+      cartaNoFacturaPdf: findDoc(DocumentKind.CARTA_NO_FACTURA),
+      reglamentoParquePdf: findDoc(DocumentKind.REGLAMENTO_PARQUE),
+      cartaAutorizacionPdf: findDoc(DocumentKind.CARTA_AUTORIZACION),
     },
   };
 }
@@ -319,14 +403,39 @@ export function saleToAuditSnapshot(sale: Sale): Record<string, unknown> {
   if (docs.some((d) => d.kind === DocumentKind.CONSTANCIA_FISCAL)) {
     docLabels.push('Constancia de situación fiscal');
   }
+  if (docs.some((d) => d.kind === DocumentKind.TARJETA)) {
+    docLabels.push('Tarjeta (ambos lados)');
+  } else {
+    if (docs.some((d) => d.kind === DocumentKind.TARJETA_FRENTE)) {
+      docLabels.push('Tarjeta (frente)');
+    }
+    if (docs.some((d) => d.kind === DocumentKind.TARJETA_REVERSO)) {
+      docLabels.push('Tarjeta (reverso)');
+    }
+  }
   if (docs.some((d) => d.kind === DocumentKind.FIRMA)) {
     docLabels.push('Firma');
   }
   if (docs.some((d) => d.kind === DocumentKind.TICKET_PAGO)) {
     docLabels.push('Ticket de pago');
   }
+  if (docs.some((d) => d.kind === DocumentKind.COMP_TRANSFERENCIA)) {
+    docLabels.push('Comprobante de transferencia');
+  }
   if (docs.some((d) => d.kind === DocumentKind.CARATULA)) {
     docLabels.push('Carátula');
+  }
+  if (docs.some((d) => d.kind === DocumentKind.CARTA_FACTURA)) {
+    docLabels.push('Carta de requerimiento de factura');
+  }
+  if (docs.some((d) => d.kind === DocumentKind.CARTA_NO_FACTURA)) {
+    docLabels.push('Consentimiento de no factura');
+  }
+  if (docs.some((d) => d.kind === DocumentKind.REGLAMENTO_PARQUE)) {
+    docLabels.push('Reglamento de parque');
+  }
+  if (docs.some((d) => d.kind === DocumentKind.CARTA_AUTORIZACION)) {
+    docLabels.push('Carta de autorización');
   }
   const docsOnDrive = docs.filter((d) => d.driveFileId).length;
 
@@ -376,6 +485,8 @@ export function saleToAuditSnapshot(sale: Sale): Record<string, unknown> {
     snap.formaPago = sale.formaPago;
     snap.banco = sale.banco;
     snap.cuenta = sale.cuenta;
+    snap.bancoPago = sale.bancoPago;
+    snap.cuentaPago = sale.cuentaPago;
     if (sale.montoRecibido) snap.montoRecibido = sale.montoRecibido;
     if (sale.cambio) snap.cambio = sale.cambio;
     snap.nombreAsesor = sale.nombreAsesor;
@@ -415,9 +526,13 @@ export function applyPayloadToSale(sale: Sale, payload: SaleFormPayloadDto) {
   sale.serviceTypeName = s(meta.serviceTypeName);
   // folioSolicitud: lo asigna el servidor (= id de venta)
   sale.fechaServicio = dateOrNull(meta.fechaServicio);
-  sale.estatus = s(meta.estatus, 'ACTIVO');
+  sale.estatus =
+    estatusFromTipoVenta(meta.tipoVenta) || s(meta.estatus, 'ACTIVO');
   sale.anterior = s(meta.anterior);
   sale.verificacion = s(meta.verificacion);
+  sale.reconocimientoVentas = stringifyReconocimientoVentas(
+    meta.reconocimientoVentas,
+  );
 
   const kind = s(plan.planKind).toUpperCase();
   sale.planKind =
@@ -471,12 +586,21 @@ export function applyPayloadToSale(sale: Sale, payload: SaleFormPayloadDto) {
       sale.precioPlan,
       sale.promocionDescuento,
       sale.anticipo,
+      recognizedFromVentas(sale.reconocimientoVentas),
     );
     sale.fechaProximoPago = dateOrNull(pago.fechaProximoPago);
     sale.diasEspecificosPago = s(pago.diasEspecificosPago);
     sale.formaPago = s(pago.formaPago);
     sale.cuenta = s(pago.cuenta);
     sale.banco = s(pago.banco);
+    sale.vencimientoTarjeta = s(pago.vencimientoTarjeta);
+    sale.titularTarjeta = s(pago.titularTarjeta);
+    sale.cvv = s(pago.cvv);
+    sale.numeroEmpleado = s(pago.numeroEmpleado);
+    sale.nombreEmpleado = s(pago.nombreEmpleado);
+    sale.empresaNomina = s(pago.empresaNomina);
+    sale.empresaNominaId = optionalInt(pago.empresaNominaId);
+    sale.infoNomina = s(pago.infoNomina);
     sale.montoRecibido = s(pago.montoRecibido);
     sale.cambio = s(pago.cambio);
     sale.nombreAsesor = s(pago.nombreAsesor);
@@ -495,6 +619,13 @@ export function applyPayloadToSale(sale: Sale, payload: SaleFormPayloadDto) {
   h.sexo = s(c.sexo);
   h.curp = s(c.curp).toUpperCase();
   h.factura = s(c.factura);
+  h.tipoPersona = s(c.tipoPersona).toUpperCase();
+  h.razonSocial = s(c.razonSocial);
+  h.rfc = s(c.rfc).toUpperCase();
+  h.facturaCp = s(c.facturaCp);
+  h.regimenFiscal = s(c.regimenFiscal).toUpperCase();
+  h.regimenFiscalOtro = s(c.regimenFiscalOtro);
+  h.telefonoFactura = normalizeMxPhone(c.telefonoFactura);
   h.fechaNacimiento = dateOrNull(c.fechaNacimiento);
   h.estadoCivil = s(c.estadoCivil);
   h.sindicalizado = s(c.sindicalizado);
@@ -596,6 +727,11 @@ export function applyPayloadToSale(sale: Sale, payload: SaleFormPayloadDto) {
   };
   pushDoc(DocumentKind.INE, payload.documentos?.ine);
   pushDoc(DocumentKind.COMPROBANTE, payload.documentos?.comprobanteDomicilio);
+  if (s(c.tipoCobranza).toUpperCase() === 'DOMICILIADO') {
+    pushDoc(DocumentKind.TARJETA_FRENTE, payload.documentos?.tarjetaFrente);
+    pushDoc(DocumentKind.TARJETA_REVERSO, payload.documentos?.tarjetaReverso);
+    pushDoc(DocumentKind.TARJETA, payload.documentos?.tarjetaPdf);
+  }
   if (s(c.factura).toUpperCase() === 'SI') {
     pushDoc(
       DocumentKind.CONSTANCIA_FISCAL,
@@ -604,6 +740,10 @@ export function applyPayloadToSale(sale: Sale, payload: SaleFormPayloadDto) {
   }
   pushDoc(DocumentKind.FIRMA, payload.documentos?.firmaCliente);
   pushDoc(DocumentKind.TICKET_PAGO, payload.documentos?.ticketPago);
+  pushDoc(
+    DocumentKind.COMP_TRANSFERENCIA,
+    payload.documentos?.comprobanteTransferencia,
+  );
   sale.documents = docs;
 
   sale.titularName = fullName(h) || sale.titularName;

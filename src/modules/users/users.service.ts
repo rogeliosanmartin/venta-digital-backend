@@ -112,6 +112,10 @@ export class UsersService implements OnModuleInit {
       username: dto.username ?? null,
       passwordHash,
       active: true,
+      nombreJefeVentas:
+        dto.type === UserType.VENDEDOR
+          ? this.normalizeJefeVentas(dto.nombreJefeVentas)
+          : null,
     });
 
     const codes = this.resolveDefaultPermissions(dto);
@@ -183,6 +187,11 @@ export class UsersService implements OnModuleInit {
     }
 
     user.fullName = dto.fullName.trim();
+    if (user.type === UserType.VENDEDOR) {
+      user.nombreJefeVentas = this.normalizeJefeVentas(dto.nombreJefeVentas);
+    } else {
+      user.nombreJefeVentas = null;
+    }
     await this.usersRepository.save(user);
 
     const updated = await this.findById(id);
@@ -300,6 +309,7 @@ export class UsersService implements OnModuleInit {
     cellphone: string | null;
     username: string | null;
     active: boolean;
+    nombreJefeVentas?: string | null;
   }) {
     return {
       id: user.id,
@@ -308,6 +318,7 @@ export class UsersService implements OnModuleInit {
       cellphone: user.cellphone,
       username: user.username,
       active: user.active,
+      nombreJefeVentas: user.nombreJefeVentas ?? null,
     };
   }
 
@@ -340,6 +351,11 @@ export class UsersService implements OnModuleInit {
   private normalizeCellphone(cellphone?: string | null): string | null {
     if (cellphone == null) return null;
     return cellphone.trim();
+  }
+
+  private normalizeJefeVentas(value?: string | null): string | null {
+    const name = (value ?? '').trim();
+    return name || null;
   }
 
   /**
@@ -528,6 +544,7 @@ export class UsersService implements OnModuleInit {
       cellphone: user.cellphone,
       username: user.username,
       active: user.active,
+      nombreJefeVentas: user.nombreJefeVentas ?? null,
       permissions: (user.userPermissions ?? [])
         .map((up) => up.permission?.code)
         .filter(Boolean),

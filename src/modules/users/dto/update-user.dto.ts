@@ -1,4 +1,11 @@
-import { IsOptional, IsString, Length, Matches, MinLength } from 'class-validator';
+import {
+  IsOptional,
+  IsString,
+  Length,
+  Matches,
+  MaxLength,
+  MinLength,
+} from 'class-validator';
 
 /**
  * Edición de usuario.
@@ -25,4 +32,9 @@ export class UpdateUserDto {
   @IsString()
   @MinLength(6)
   password?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(120)
+  nombreJefeVentas?: string;
 }

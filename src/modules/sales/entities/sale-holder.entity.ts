@@ -38,6 +38,27 @@ export class SaleHolder {
   @Column({ type: 'varchar', length: 10, default: '' })
   factura!: string;
 
+  @Column({ name: 'tipo_persona', type: 'varchar', length: 10, default: '' })
+  tipoPersona!: string;
+
+  @Column({ name: 'razon_social', type: 'varchar', length: 200, default: '' })
+  razonSocial!: string;
+
+  @Column({ type: 'varchar', length: 13, default: '' })
+  rfc!: string;
+
+  @Column({ name: 'factura_cp', type: 'varchar', length: 10, default: '' })
+  facturaCp!: string;
+
+  @Column({ name: 'regimen_fiscal', type: 'varchar', length: 10, default: '' })
+  regimenFiscal!: string;
+
+  @Column({ name: 'regimen_fiscal_otro', type: 'varchar', length: 120, default: '' })
+  regimenFiscalOtro!: string;
+
+  @Column({ name: 'telefono_factura', type: 'varchar', length: 20, default: '' })
+  telefonoFactura!: string;
+
   @Column({ name: 'fecha_nacimiento', type: 'date', nullable: true })
   fechaNacimiento!: string | null;
 

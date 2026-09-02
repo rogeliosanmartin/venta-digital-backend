@@ -80,20 +80,52 @@ function pageHeight(pageDict: string): number {
   return m ? Number(m[1]) : DEFAULT_PAGE_H;
 }
 
-function injectFontResource(pageDict: string, fontRef: string): string {
-  if (/\/Resources\s+\d+\s+0\s+R/.test(pageDict)) {
-    throw new Error('Resources PDF indirecto no soportado');
+function addFontToDict(dict: string, fontRef: string): string {
+  if (/\/VdC\s+\d+\s+0\s+R/.test(dict)) return dict;
+  if (/\/Font\s*<</.test(dict)) {
+    return dict.replace(/\/Font\s*<</, `/Font << /VdC ${fontRef} `);
   }
-  if (/\/Font\s*<</.test(pageDict)) {
-    return pageDict.replace(/\/Font\s*<</, `/Font << /VdC ${fontRef} `);
+  return dict.replace(/<</, `<< /Font << /VdC ${fontRef} >> `);
+}
+
+function addNamedFont(fontDict: string, fontRef: string): string {
+  if (/\/VdC\s+\d+\s+0\s+R/.test(fontDict)) return fontDict;
+  return fontDict.replace(/<</, `<< /VdC ${fontRef} `);
+}
+
+/** Inyecta /VdC en Resources, aunque vengan como referencia (jsPDF 3/4). */
+function injectFontResource(
+  pdf: string,
+  pageDict: string,
+  fontRef: string,
+): { pageDict: string; rewritten: { num: number; dict: string }[] } {
+  const rewritten: { num: number; dict: string }[] = [];
+  const resourcesRef = /\/Resources\s+(\d+)\s+0\s+R/.exec(pageDict);
+
+  if (!resourcesRef) {
+    return { pageDict: addFontToDict(pageDict, fontRef), rewritten };
   }
-  if (/\/Resources\s*<</.test(pageDict)) {
-    return pageDict.replace(
-      /\/Resources\s*<</,
-      `/Resources << /Font << /VdC ${fontRef} >> `,
-    );
+
+  const resourcesNum = Number(resourcesRef[1]);
+  const resourcesRaw = findObjectRaw(pdf, resourcesNum);
+  let resourcesDict = extractDict(resourcesRaw);
+  const fontRefMatch = /\/Font\s+(\d+)\s+0\s+R/.exec(resourcesDict);
+
+  if (fontRefMatch) {
+    const fontDictNum = Number(fontRefMatch[1]);
+    const fontDictRaw = findObjectRaw(pdf, fontDictNum);
+    rewritten.push({
+      num: fontDictNum,
+      dict: addNamedFont(extractDict(fontDictRaw), fontRef),
+    });
+    return { pageDict, rewritten };
   }
-  return pageDict.replace(/<</, `<< /Resources << /Font << /VdC ${fontRef} >> >>`);
+
+  rewritten.push({
+    num: resourcesNum,
+    dict: addFontToDict(resourcesDict, fontRef),
+  });
+  return { pageDict, rewritten };
 }
 
 function appendContents(pageDict: string, streamRef: string): string {
@@ -137,6 +169,10 @@ function stampOperators(folio: string, pageH: number): string {
   ].join('\n');
 }
 
+function objectBody(num: number, dict: string): string {
+  return `${num} 0 obj\n${dict}\nendobj\n`;
+}
+
 /** Escribe el folio de cotización en el hueco CONTRATO de la carátula. */
 export function stampContratoOnCaratulaPdf(
   pdfBytes: Buffer,
@@ -149,52 +185,57 @@ export function stampContratoOnCaratulaPdf(
   const { size, root, startxref } = parseTrailer(pdf);
   const pageNum = firstPageObjectNum(pdf, root);
   const pageRaw = findObjectRaw(pdf, pageNum);
-  const pageDict = injectFontResource(
-    appendContents(extractDict(pageRaw), `${size + 1} 0 R`),
-    `${size} 0 R`,
-  );
+  let pageDict = appendContents(extractDict(pageRaw), `${size + 1} 0 R`);
+  const injected = injectFontResource(pdf, pageDict, `${size} 0 R`);
+  pageDict = injected.pageDict;
   const pageH = pageHeight(pageDict);
   const ops = stampOperators(folio, pageH);
 
-  const fontObj =
-    `${size} 0 obj\n` +
-    '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Bold >>\n' +
-    'endobj\n';
-  const streamObj =
-    `${size + 1} 0 obj\n` +
-    `<< /Length ${Buffer.byteLength(ops, 'latin1')} >>\n` +
-    `stream\n${ops}endstream\n` +
-    'endobj\n';
-  const pageObj = `${pageNum} 0 obj\n${pageDict}\nendobj\n`;
+  const parts: { num: number; body: string }[] = [
+    ...injected.rewritten.map((item) => ({
+      num: item.num,
+      body: objectBody(item.num, item.dict),
+    })),
+    { num: pageNum, body: objectBody(pageNum, pageDict) },
+    {
+      num: size,
+      body:
+        `${size} 0 obj\n` +
+        '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Bold >>\n' +
+        'endobj\n',
+    },
+    {
+      num: size + 1,
+      body:
+        `${size + 1} 0 obj\n` +
+        `<< /Length ${Buffer.byteLength(ops, 'latin1')} >>\n` +
+        `stream\n${ops}endstream\n` +
+        'endobj\n',
+    },
+  ];
 
   const chunks: Buffer[] = [pdfBytes];
   if (pdfBytes[pdfBytes.length - 1] !== 0x0a) {
     chunks.push(Buffer.from('\n', 'latin1'));
   }
-  const baseLen = chunks.reduce((n, c) => n + c.length, 0);
-  const pageOff = baseLen;
-  const fontOff = pageOff + Buffer.byteLength(pageObj, 'latin1');
-  const streamOff = fontOff + Buffer.byteLength(fontObj, 'latin1');
-  const xrefOff =
-    streamOff + Buffer.byteLength(streamObj, 'latin1');
+  let offset = chunks.reduce((n, c) => n + c.length, 0);
+  const xrefItems: { num: number; offset: number }[] = [];
+  const bodies: string[] = [];
+  for (const part of parts) {
+    xrefItems.push({ num: part.num, offset });
+    bodies.push(part.body);
+    offset += Buffer.byteLength(part.body, 'latin1');
+  }
 
-  const xref =
-    'xref\n' +
-    '0 1\n' +
-    '0000000000 65535 f \n' +
-    `${pageNum} 1\n` +
-    xrefEntry(pageOff) +
-    `${size} 1\n` +
-    xrefEntry(fontOff) +
-    `${size + 1} 1\n` +
-    xrefEntry(streamOff);
+  let xref = 'xref\n0 1\n0000000000 65535 f \n';
+  for (const item of xrefItems.sort((a, b) => a.num - b.num)) {
+    xref += `${item.num} 1\n${xrefEntry(item.offset)}`;
+  }
 
   const trailer =
     `trailer\n<< /Size ${size + 2} /Root ${root} /Prev ${startxref} >>\n` +
-    `startxref\n${xrefOff}\n%%EOF\n`;
+    `startxref\n${offset}\n%%EOF\n`;
 
-  chunks.push(
-    Buffer.from(pageObj + fontObj + streamObj + xref + trailer, 'latin1'),
-  );
+  chunks.push(Buffer.from(bodies.join('') + xref + trailer, 'latin1'));
   return Buffer.concat(chunks);
 }

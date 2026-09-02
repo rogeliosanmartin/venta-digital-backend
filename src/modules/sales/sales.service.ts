@@ -27,6 +27,7 @@ import {
   computeSaldo,
   fullName,
   realContrato,
+  recognizedFromVentas,
   saleToAuditSnapshot,
   saleToPayload,
   saleToPublic,
@@ -84,6 +85,7 @@ export class SalesService {
       sale.precioPlan,
       sale.promocionDescuento,
       sale.anticipo,
+      recognizedFromVentas(sale.reconocimientoVentas),
     );
   }
 
@@ -175,6 +177,17 @@ export class SalesService {
     }
   }
 
+  /** Asesor y jefe de ventas: catálogo del vendedor, no captura por venta. */
+  private applySellerCatalogNames(
+    sale: Sale,
+    seller?: { fullName?: string | null; nombreJefeVentas?: string | null } | null,
+  ) {
+    const asesor = seller?.fullName?.trim();
+    if (asesor) sale.nombreAsesor = asesor;
+    const jefe = (seller?.nombreJefeVentas ?? '').trim();
+    if (jefe) sale.nombreJefeVentas = jefe;
+  }
+
   private async purgeExpired() {
     await this.salesRepository.deleteExpiredDrafts(new Date());
   }
@@ -219,22 +232,92 @@ export class SalesService {
       throw new BadRequestException('El tipo de servicio es obligatorio');
     }
 
+    const wantsInvoice =
+      (payload.contacto?.factura || '').trim().toUpperCase() === 'SI';
+    if (wantsInvoice) {
+      const c = payload.contacto ?? {};
+      const tipo = (c.tipoPersona || '').trim().toUpperCase();
+      if (tipo !== 'FISICA' && tipo !== 'MORAL') {
+        throw new BadRequestException('El tipo de persona de factura es obligatorio');
+      }
+      if (!(c.razonSocial || '').trim()) {
+        throw new BadRequestException('La razón social de factura es obligatoria');
+      }
+      const rfc = (c.rfc || '').trim().toUpperCase();
+      if (!/^[A-ZÑ&]{3,4}\d{6}[A-Z0-9]{3}$/.test(rfc)) {
+        throw new BadRequestException('El RFC de factura no es válido');
+      }
+      const cp = (c.facturaCp || '').replace(/\D/g, '');
+      if (cp.length !== 5) {
+        throw new BadRequestException('El C.P. de factura debe tener 5 dígitos');
+      }
+      const regimen = (c.regimenFiscal || '').trim().toUpperCase();
+      if (!regimen) {
+        throw new BadRequestException('El régimen fiscal es obligatorio');
+      }
+      if (regimen === 'OTRO' && !(c.regimenFiscalOtro || '').trim()) {
+        throw new BadRequestException('Indica el otro régimen fiscal');
+      }
+      try {
+        assertMxPhone(c.telefonoFactura, 'Teléfono de factura', true);
+      } catch (e) {
+        throw new BadRequestException((e as Error).message);
+      }
+    }
+
+    const cobranza = (payload.contacto?.tipoCobranza || '').trim().toUpperCase();
+    const pago = payload.pago ?? {};
+    if (strictDocs) {
+      if (!cobranza) {
+        throw new BadRequestException('El tipo de cobranza es obligatorio');
+      }
+      if (cobranza === 'DOMICILIADO') {
+        const card = String(pago.cuenta || '').replace(/\D/g, '');
+        if (card.length < 12) {
+          throw new BadRequestException('En domiciliación indica el número de tarjeta');
+        }
+        if (!(pago.vencimientoTarjeta || '').trim()) {
+          throw new BadRequestException('En domiciliación indica el vencimiento de la tarjeta');
+        }
+        if (String(pago.cvv || '').replace(/\D/g, '').length !== 3) {
+          throw new BadRequestException('En domiciliación indica los dígitos de seguridad');
+        }
+        if (!(pago.titularTarjeta || '').trim()) {
+          throw new BadRequestException('En domiciliación indica el titular de la tarjeta');
+        }
+        if (!(pago.banco || '').trim()) {
+          throw new BadRequestException('En domiciliación indica el banco');
+        }
+        if (!(payload.contacto?.correo || '').trim()) {
+          throw new BadRequestException('En domiciliación el correo del titular es obligatorio');
+        }
+      }
+      if (cobranza === 'NOMINA' || cobranza === 'NÓMINA') {
+        if (!pago.empresaNominaId && !(pago.empresaNomina || '').trim()) {
+          throw new BadRequestException('En nómina indica la empresa de convenio');
+        }
+        if (!(pago.nombreEmpleado || '').trim()) {
+          throw new BadRequestException('En nómina indica el nombre del empleado');
+        }
+        if (!(pago.numeroEmpleado || '').trim()) {
+          throw new BadRequestException('En nómina indica el número de empleado');
+        }
+      }
+    }
+
     if (strictDocs) {
       if (!payload.documentos?.ine || !payload.documentos?.comprobanteDomicilio) {
         throw new BadRequestException(
           'Debes adjuntar INE y comprobante de domicilio',
         );
       }
-      const wantsInvoice =
-        (payload.contacto?.factura || '').trim().toUpperCase() === 'SI';
-      if (wantsInvoice) {
-        const csf = payload.documentos?.constanciaSituacionFiscal;
-        const mime = (csf?.mime || '').toLowerCase();
-        const name = (csf?.name || '').toLowerCase();
-        const isPdf = mime.includes('pdf') || name.endsWith('.pdf');
-        if (!csf || !isPdf) {
+      if (cobranza === 'DOMICILIADO') {
+        if (
+          !payload.documentos?.tarjetaFrente ||
+          !payload.documentos?.tarjetaReverso
+        ) {
           throw new BadRequestException(
-            'Si el titular requiere factura, adjunta la constancia de situación fiscal en PDF',
+            'En domiciliación debes adjuntar el frente y el reverso de la tarjeta',
           );
         }
       }
@@ -690,6 +773,7 @@ export class SalesService {
     sale.amount = '0';
     sale.draftExpiresAt = await this.draftExpiry(now);
     applyPayloadToSale(sale, dto.payload);
+    this.applySellerCatalogNames(sale, seller);
     await this.assertDiscountAndSaldo(sale, user.userId);
     if (dto.titularName?.trim()) sale.titularName = dto.titularName.trim();
 
@@ -735,6 +819,8 @@ export class SalesService {
     }
 
     applyPayloadToSale(sale, dto.payload);
+    const seller = await this.usersRepository.findById(user.userId);
+    this.applySellerCatalogNames(sale, seller);
     await this.assertDiscountAndSaldo(sale, user.userId);
     if (dto.titularName?.trim()) sale.titularName = dto.titularName.trim();
     sale.draftExpiresAt = await this.draftExpiry();
@@ -781,6 +867,7 @@ export class SalesService {
     }
 
     applyPayloadToSale(sale, dto.payload);
+    this.applySellerCatalogNames(sale, seller);
     await this.assertDiscountAndSaldo(sale, user.userId);
     sale.status = SaleStatus.PENDING_PAYMENT;
     sale.draftExpiresAt = null;
@@ -838,11 +925,11 @@ export class SalesService {
     };
   }
 
-  /** Importe a cobrar al registrar pago: pago inicial si existe, si no anticipo. */
+  /** Importe a cobrar: anticipo + pago inicial (si ambos existen). */
   private paymentDueAmount(sale: Sale): number {
+    const anticipo = this.parseMoney(sale.anticipo);
     const inicial = this.parseMoney(sale.pagoInicial);
-    if (inicial > 0) return inicial;
-    return this.parseMoney(sale.anticipo);
+    return Number(((anticipo > 0 ? anticipo : 0) + (inicial > 0 ? inicial : 0)).toFixed(2));
   }
 
   async savePayment(id: number, user: AuthUserPayload, dto: SavePaymentDto) {
@@ -857,11 +944,10 @@ export class SalesService {
 
     const p = dto.pago;
 
-    // Financiamiento ya quedó validado al finalizar la captura; aquí solo pago.
+    // Financiamiento y domiciliación ya quedaron en captura; aquí solo este cobro.
     sale.formaPago = (p.formaPago ?? '').trim();
-    sale.cuenta = (p.cuenta ?? '').trim();
-    sale.banco = (p.banco ?? '').trim();
-    sale.nombreJefeVentas = (p.nombreJefeVentas ?? '').trim();
+    sale.cuentaPago = (p.cuentaPago ?? '').trim();
+    sale.bancoPago = (p.bancoPago ?? '').trim();
 
     const forma = sale.formaPago.toUpperCase();
     if (
@@ -884,8 +970,8 @@ export class SalesService {
     }
 
     if (forma === 'EFECTIVO') {
-      sale.cuenta = '';
-      sale.banco = '';
+      sale.cuentaPago = '';
+      sale.bancoPago = '';
       sale.montoRecibido = (p.montoRecibido ?? '').trim();
       if (!sale.montoRecibido) {
         throw new BadRequestException('Indica el efectivo recibido');
@@ -898,7 +984,7 @@ export class SalesService {
       }
       if (received < dueNum) {
         throw new BadRequestException(
-          'El efectivo recibido debe cubrir el pago inicial o anticipo',
+          'El efectivo recibido debe cubrir el anticipo y el pago inicial',
         );
       }
       sale.cambio = String(
@@ -907,14 +993,14 @@ export class SalesService {
     } else {
       sale.montoRecibido = '';
       sale.cambio = '';
-      if (!sale.banco) {
+      if (!sale.bancoPago) {
         throw new BadRequestException('Indica el banco');
       }
       if (
         (forma === 'TRANSFERENCIA' ||
           forma === 'TARJETA DEBITO' ||
           forma === 'TARJETA CREDITO') &&
-        !sale.cuenta
+        !sale.cuentaPago
       ) {
         throw new BadRequestException(
           forma.startsWith('TARJETA')
@@ -923,7 +1009,17 @@ export class SalesService {
         );
       }
       if (forma === 'CHEQUE') {
-        sale.cuenta = '';
+        sale.cuentaPago = '';
+      }
+      if (forma === 'TRANSFERENCIA') {
+        const existing = (sale.documents ?? []).find(
+          (d) => d.kind === DocumentKind.COMP_TRANSFERENCIA,
+        );
+        if (!dto.comprobanteTransferencia?.dataBase64 && !existing?.dataBase64 && !existing?.driveFileId) {
+          throw new BadRequestException(
+            'Adjunta el comprobante de transferencia',
+          );
+        }
       }
     }
 
@@ -931,10 +1027,12 @@ export class SalesService {
     const n = Number(String(sale.precioPlan).replace(/[^0-9.-]/g, ''));
     if (Number.isFinite(n)) sale.amount = n.toFixed(2);
 
-    // El asesor es el vendedor de la venta (usuario en sesión).
+    // Asesor y jefe de ventas salen del catálogo del vendedor.
     const seller = await this.usersRepository.findById(user.userId);
-    sale.nombreAsesor =
-      sale.sellerName?.trim() || seller?.fullName?.trim() || '';
+    this.applySellerCatalogNames(sale, seller);
+    if (!sale.nombreAsesor) {
+      sale.nombreAsesor = sale.sellerName?.trim() || '';
+    }
 
     if (dto.ticketPdf?.dataBase64) {
       const docs = (sale.documents ?? []).filter(
@@ -948,6 +1046,24 @@ export class SalesService {
       ticket.driveFileId = null;
       ticket.driveFileUrl = null;
       docs.push(ticket);
+      sale.documents = docs;
+    }
+
+    if (dto.comprobanteTransferencia?.dataBase64) {
+      const docs = (sale.documents ?? []).filter(
+        (d) => d.kind !== DocumentKind.COMP_TRANSFERENCIA,
+      );
+      const transfer = new SaleDocument();
+      transfer.kind = DocumentKind.COMP_TRANSFERENCIA;
+      transfer.name =
+        dto.comprobanteTransferencia.name ||
+        `comprobante-transferencia_${sale.id}`;
+      transfer.mime =
+        dto.comprobanteTransferencia.mime || 'application/octet-stream';
+      transfer.dataBase64 = dto.comprobanteTransferencia.dataBase64;
+      transfer.driveFileId = null;
+      transfer.driveFileUrl = null;
+      docs.push(transfer);
       sale.documents = docs;
     }
 
@@ -982,6 +1098,12 @@ export class SalesService {
     const sale = await this.salesRepository.findByIdWithFiles(id);
     if (!sale) throw new NotFoundException('Venta no encontrada');
     this.assertSellerOwns(sale, user.userId);
+    if (sale.status === SaleStatus.COMPLETED) {
+      return {
+        ...saleToPublic(sale),
+        odooSyncError: null,
+      };
+    }
     if (sale.status !== SaleStatus.PENDING_SIGNATURE) {
       throw new BadRequestException(
         'Solo se puede firmar cuando el pago ya fue registrado',
@@ -1013,6 +1135,76 @@ export class SalesService {
       if (!prevCaratula) docs.push(caratula);
     }
 
+    if (dto.cartaFacturaPdf?.dataBase64) {
+      const prevCarta = docs.find((d) => d.kind === DocumentKind.CARTA_FACTURA);
+      const carta = prevCarta ?? new SaleDocument();
+      carta.kind = DocumentKind.CARTA_FACTURA;
+      carta.name =
+        dto.cartaFacturaPdf.name || `${sale.id}-CartaRequerimientoFactura.pdf`;
+      carta.mime = dto.cartaFacturaPdf.mime || 'application/pdf';
+      carta.dataBase64 = dto.cartaFacturaPdf.dataBase64;
+      carta.driveFileId = null;
+      carta.driveFileUrl = null;
+      if (!prevCarta) docs.push(carta);
+    }
+
+    if (dto.cartaNoFacturaPdf?.dataBase64) {
+      const prevNoFactura = docs.find(
+        (d) => d.kind === DocumentKind.CARTA_NO_FACTURA,
+      );
+      const noFactura = prevNoFactura ?? new SaleDocument();
+      noFactura.kind = DocumentKind.CARTA_NO_FACTURA;
+      noFactura.name =
+        dto.cartaNoFacturaPdf.name || `${sale.id}-ConsentimientoNoFactura.pdf`;
+      noFactura.mime = dto.cartaNoFacturaPdf.mime || 'application/pdf';
+      noFactura.dataBase64 = dto.cartaNoFacturaPdf.dataBase64;
+      noFactura.driveFileId = null;
+      noFactura.driveFileUrl = null;
+      if (!prevNoFactura) docs.push(noFactura);
+    }
+
+    if (dto.reglamentoParquePdf?.dataBase64) {
+      const prevReglamento = docs.find(
+        (d) => d.kind === DocumentKind.REGLAMENTO_PARQUE,
+      );
+      const reglamento = prevReglamento ?? new SaleDocument();
+      reglamento.kind = DocumentKind.REGLAMENTO_PARQUE;
+      reglamento.name =
+        dto.reglamentoParquePdf.name || `${sale.id}-ReglamentoParque.pdf`;
+      reglamento.mime = dto.reglamentoParquePdf.mime || 'application/pdf';
+      reglamento.dataBase64 = dto.reglamentoParquePdf.dataBase64;
+      reglamento.driveFileId = null;
+      reglamento.driveFileUrl = null;
+      if (!prevReglamento) docs.push(reglamento);
+    }
+
+    if (dto.cartaAutorizacionPdf?.dataBase64) {
+      const prevAuth = docs.find((d) => d.kind === DocumentKind.CARTA_AUTORIZACION);
+      const authDoc = prevAuth ?? new SaleDocument();
+      authDoc.kind = DocumentKind.CARTA_AUTORIZACION;
+      authDoc.name =
+        dto.cartaAutorizacionPdf.name ||
+        `${sale.id}-CartaAutorizacionCargoAutomatico.pdf`;
+      authDoc.mime = dto.cartaAutorizacionPdf.mime || 'application/pdf';
+      authDoc.dataBase64 = dto.cartaAutorizacionPdf.dataBase64;
+      authDoc.driveFileId = null;
+      authDoc.driveFileUrl = null;
+      if (!prevAuth) docs.push(authDoc);
+    }
+
+    if (dto.tarjetaPdf?.dataBase64) {
+      const prevCard = docs.find((d) => d.kind === DocumentKind.TARJETA);
+      const cardDoc = prevCard ?? new SaleDocument();
+      cardDoc.kind = DocumentKind.TARJETA;
+      cardDoc.name =
+        dto.tarjetaPdf.name || `${sale.id}-TarjetaAmbosLados.pdf`;
+      cardDoc.mime = dto.tarjetaPdf.mime || 'application/pdf';
+      cardDoc.dataBase64 = dto.tarjetaPdf.dataBase64;
+      cardDoc.driveFileId = null;
+      cardDoc.driveFileUrl = null;
+      if (!prevCard) docs.push(cardDoc);
+    }
+
     const docAtt = (kind: DocumentKind) => {
       const d = docs.find((x) => x.kind === kind);
       if (!d?.dataBase64) return null;
@@ -1022,7 +1214,11 @@ export class SalesService {
       ine: docAtt(DocumentKind.INE),
       comprobanteDomicilio: docAtt(DocumentKind.COMPROBANTE),
       constanciaSituacionFiscal: docAtt(DocumentKind.CONSTANCIA_FISCAL),
+      tarjetaFrente: docAtt(DocumentKind.TARJETA_FRENTE),
+      tarjetaReverso: docAtt(DocumentKind.TARJETA_REVERSO),
+      tarjetaPdf: docAtt(DocumentKind.TARJETA),
       ticketPago: docAtt(DocumentKind.TICKET_PAGO),
+      comprobanteTransferencia: docAtt(DocumentKind.COMP_TRANSFERENCIA),
       firmaCliente: dto.firmaCliente,
     };
 
@@ -1031,8 +1227,14 @@ export class SalesService {
       comprobanteDomicilio: DocumentKind.COMPROBANTE,
       constanciaSituacionFiscal: DocumentKind.CONSTANCIA_FISCAL,
       ticketPago: DocumentKind.TICKET_PAGO,
+      comprobanteTransferencia: DocumentKind.COMP_TRANSFERENCIA,
       firmaCliente: DocumentKind.FIRMA,
       caratulaPdf: DocumentKind.CARATULA,
+      cartaFacturaPdf: DocumentKind.CARTA_FACTURA,
+      cartaNoFacturaPdf: DocumentKind.CARTA_NO_FACTURA,
+      reglamentoParquePdf: DocumentKind.REGLAMENTO_PARQUE,
+      cartaAutorizacionPdf: DocumentKind.CARTA_AUTORIZACION,
+      tarjetaPdf: DocumentKind.TARJETA,
     };
 
     if (this.googleDrive.isEnabled()) {
@@ -1044,6 +1246,11 @@ export class SalesService {
           fecha: sale.fecha,
           documentos: documentosPayload,
           caratulaPdf: dto.caratulaPdf ?? null,
+          cartaFacturaPdf: dto.cartaFacturaPdf ?? null,
+          cartaNoFacturaPdf: dto.cartaNoFacturaPdf ?? null,
+          reglamentoParquePdf: dto.reglamentoParquePdf ?? null,
+          cartaAutorizacionPdf: dto.cartaAutorizacionPdf ?? null,
+          tarjetaPdf: dto.tarjetaPdf ?? docAtt(DocumentKind.TARJETA),
         });
         if (!driveInfo) {
           throw new Error('Drive no devolvió carpeta de venta');
@@ -1058,7 +1265,12 @@ export class SalesService {
             doc.kind = kind;
             doc.name = file.name;
             doc.mime =
-              kind === DocumentKind.CARATULA
+              kind === DocumentKind.CARATULA ||
+              kind === DocumentKind.CARTA_FACTURA ||
+              kind === DocumentKind.CARTA_NO_FACTURA ||
+              kind === DocumentKind.REGLAMENTO_PARQUE ||
+              kind === DocumentKind.CARTA_AUTORIZACION ||
+              kind === DocumentKind.TARJETA
                 ? 'application/pdf'
                 : 'application/octet-stream';
             docs.push(doc);
@@ -1074,6 +1286,14 @@ export class SalesService {
           ) {
             doc.dataBase64 = null;
           }
+        }
+
+        for (const side of [
+          DocumentKind.TARJETA_FRENTE,
+          DocumentKind.TARJETA_REVERSO,
+        ]) {
+          const sideDoc = docs.find((d) => d.kind === side);
+          if (sideDoc) sideDoc.dataBase64 = null;
         }
 
         sale.documents = docs;
@@ -1118,11 +1338,12 @@ export class SalesService {
       details: { after: saleToAuditSnapshot(sale) },
     });
 
-    const odooSync = await this.syncReceptionToOdoo(sale.id);
-    sale.odooReceptionSynced = odooSync.synced;
+    void this.syncReceptionToOdoo(sale.id).then((odooSync) => {
+      sale.odooReceptionSynced = odooSync.synced;
+    });
     return {
       ...saleToPublic(sale),
-      odooSyncError: odooSync.error ?? null,
+      odooSyncError: null,
     };
   }
 

@@ -5,6 +5,7 @@ import {
   IsString,
   Length,
   Matches,
+  MaxLength,
   MinLength,
   ValidateIf,
 } from 'class-validator';
@@ -47,4 +48,11 @@ export class CreateUserDto {
   @IsArray()
   @IsString({ each: true })
   permissionCodes?: string[];
+
+  /** Solo VENDEDOR: nombre que sale en la carátula del contrato. */
+  @ValidateIf((o) => o.type === UserType.VENDEDOR)
+  @IsOptional()
+  @IsString()
+  @MaxLength(120)
+  nombreJefeVentas?: string;
 }

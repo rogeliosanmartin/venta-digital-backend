@@ -32,6 +32,13 @@ export class SaleContactoDto extends SalePersonDto {
   @IsOptional() @IsString() sexo?: string;
   @IsOptional() @IsString() curp?: string;
   @IsOptional() @IsString() factura?: string;
+  @IsOptional() @IsString() tipoPersona?: string;
+  @IsOptional() @IsString() razonSocial?: string;
+  @IsOptional() @IsString() rfc?: string;
+  @IsOptional() @IsString() facturaCp?: string;
+  @IsOptional() @IsString() regimenFiscal?: string;
+  @IsOptional() @IsString() regimenFiscalOtro?: string;
+  @IsOptional() @IsString() telefonoFactura?: string;
   @IsOptional() @IsString() direccion?: string;
   @IsOptional() @IsString() colonia?: string;
   @IsOptional() @IsString() cp?: string;
@@ -84,6 +91,18 @@ export class SaleDerechohabientesDto {
   segundoBeneficiario?: SaleBeneficiaryDto;
 }
 
+export class ReconocimientoVentaDto {
+  @IsOptional() @Type(() => Number) @IsInt() id?: number;
+  @IsOptional() @IsString() folio?: string;
+  @IsOptional() @Type(() => Number) @IsInt() partnerId?: number;
+  @IsOptional() @IsString() partnerName?: string;
+  @IsOptional() @IsString() dateOrder?: string;
+  @IsOptional() @Type(() => Number) amountTotal?: number;
+  @IsOptional() @Type(() => Number) saldo?: number;
+  @IsOptional() @IsString() matchType?: string;
+  @IsOptional() @IsString() matchedBeneficiaryName?: string;
+}
+
 export class SaleMetaDto {
   @IsOptional() @IsString() fecha?: string;
   @IsOptional() @IsString() contrato?: string;
@@ -94,7 +113,14 @@ export class SaleMetaDto {
   @IsOptional() @IsString() serviceTypeName?: string;
   @IsOptional() @IsString() folioSolicitud?: string;
   @IsOptional() @IsString() fechaServicio?: string;
+  /** NUEVA | RECONOCIMIENTO | MEJORA | MINORIA — define estatus */
+  @IsOptional() @IsString() tipoVenta?: string;
   @IsOptional() @IsString() estatus?: string;
+  @IsOptional()
+  @IsArray()
+  @ValidateNested({ each: true })
+  @Type(() => ReconocimientoVentaDto)
+  reconocimientoVentas?: ReconocimientoVentaDto[];
   @IsOptional() @IsString() anterior?: string;
   @IsOptional() @IsString() verificacion?: string;
 }
@@ -153,6 +179,16 @@ export class SalePagoDto {
   @IsOptional() @IsString() formaPago?: string;
   @IsOptional() @IsString() cuenta?: string;
   @IsOptional() @IsString() banco?: string;
+  @IsOptional() @IsString() cuentaPago?: string;
+  @IsOptional() @IsString() bancoPago?: string;
+  @IsOptional() @IsString() vencimientoTarjeta?: string;
+  @IsOptional() @IsString() titularTarjeta?: string;
+  @IsOptional() @IsString() cvv?: string;
+  @IsOptional() @IsString() numeroEmpleado?: string;
+  @IsOptional() @IsString() nombreEmpleado?: string;
+  @IsOptional() @IsString() empresaNomina?: string;
+  @IsOptional() @Type(() => Number) @IsInt() empresaNominaId?: number | null;
+  @IsOptional() @IsString() infoNomina?: string;
   @IsOptional() @IsString() montoRecibido?: string;
   @IsOptional() @IsString() cambio?: string;
   @IsOptional() @IsString() nombreJefeVentas?: string;
@@ -183,8 +219,12 @@ export class SaleFormPayloadDto {
     ine?: SaleAttachmentDto | null;
     comprobanteDomicilio?: SaleAttachmentDto | null;
     constanciaSituacionFiscal?: SaleAttachmentDto | null;
+    tarjetaFrente?: SaleAttachmentDto | null;
+    tarjetaReverso?: SaleAttachmentDto | null;
+    tarjetaPdf?: SaleAttachmentDto | null;
     firmaCliente?: SaleAttachmentDto | null;
     ticketPago?: SaleAttachmentDto | null;
+    comprobanteTransferencia?: SaleAttachmentDto | null;
   };
 }
 
@@ -213,6 +253,12 @@ export class SavePaymentDto {
   @ValidateNested()
   @Type(() => SaleAttachmentDto)
   ticketPdf?: SaleAttachmentDto | null;
+
+  /** Foto o PDF del pago por transferencia. */
+  @IsOptional()
+  @ValidateNested()
+  @Type(() => SaleAttachmentDto)
+  comprobanteTransferencia?: SaleAttachmentDto | null;
 }
 
 export class SignSaleDto {
@@ -225,4 +271,34 @@ export class SignSaleDto {
   @ValidateNested()
   @Type(() => SaleAttachmentDto)
   caratulaPdf?: SaleAttachmentDto | null;
+
+  /** Carta de requerimiento de factura (PDF generado en el front). */
+  @IsOptional()
+  @ValidateNested()
+  @Type(() => SaleAttachmentDto)
+  cartaFacturaPdf?: SaleAttachmentDto | null;
+
+  /** Consentimiento de no factura (PDF generado en el front). */
+  @IsOptional()
+  @ValidateNested()
+  @Type(() => SaleAttachmentDto)
+  cartaNoFacturaPdf?: SaleAttachmentDto | null;
+
+  /** Reglamento de parque (PDF generado en el front). */
+  @IsOptional()
+  @ValidateNested()
+  @Type(() => SaleAttachmentDto)
+  reglamentoParquePdf?: SaleAttachmentDto | null;
+
+  /** Carta de autorización de cargo automático (domiciliación). */
+  @IsOptional()
+  @ValidateNested()
+  @Type(() => SaleAttachmentDto)
+  cartaAutorizacionPdf?: SaleAttachmentDto | null;
+
+  /** PDF de una hoja con frente y reverso de la tarjeta. */
+  @IsOptional()
+  @ValidateNested()
+  @Type(() => SaleAttachmentDto)
+  tarjetaPdf?: SaleAttachmentDto | null;
 }

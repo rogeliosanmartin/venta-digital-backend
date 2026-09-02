@@ -27,6 +27,13 @@ export type OdooClienteContacto = {
   sexo: string;
   curp: string;
   factura: string;
+  tipoPersona?: string;
+  razonSocial?: string;
+  rfc?: string;
+  facturaCp?: string;
+  regimenFiscal?: string;
+  regimenFiscalOtro?: string;
+  telefonoFactura?: string;
   direccion: string;
   colonia: string;
   cp: string;
@@ -77,6 +84,23 @@ export type OdooCliente = {
   beneficiarios: OdooClienteBeneficiary[];
 };
 
+export type OdooVentaSuspendida = {
+  id: number;
+  folio: string;
+  partnerId: number;
+  partnerName: string;
+  dateOrder: string;
+  amountTotal: number;
+  saldo: number;
+  matchType: 'titular' | 'beneficiario';
+  matchedBeneficiaryName: string;
+};
+
+export type OdooVentasSuspendidas = {
+  titular: OdooVentaSuspendida[];
+  beneficiario: OdooVentaSuspendida[];
+};
+
 export type OdooReserveSpaceResult = {
   spaceId: number;
   status: string;
@@ -116,6 +140,22 @@ export class OdooGsmClient {
     return Boolean(this.http);
   }
 
+  private mapPlan(row: Record<string, unknown>): OdooPlanProduct {
+    const company = row.companyId ?? row.company_id;
+    return {
+      id: Number(row.id) || 0,
+      name: String(row.name || ''),
+      listPrice: Number(row.listPrice ?? row.list_price) || 0,
+      defaultCode:
+        (row.defaultCode as string | null | undefined) ??
+        (row.default_code as string | null | undefined) ??
+        null,
+      companyId: Array.isArray(company) ? Number(company[0]) || 0 : Number(company) || 0,
+      isPlanProduct: Boolean(row.isPlanProduct ?? row.is_plan_product),
+      withoutInterest: Boolean(row.withoutInterest ?? row.without_interest),
+    };
+  }
+
   /**
    * companyId Odoo: 1 Parque · 2 Plan a futuro
    */
@@ -132,7 +172,9 @@ export class OdooGsmClient {
         '/productos/planes',
         { params: { companyId, ids: uniqueIds.join(',') } },
       );
-      const rows = Array.isArray(data) ? data : [];
+      const rows = (Array.isArray(data) ? data : []).map((row) =>
+        this.mapPlan(row as unknown as Record<string, unknown>),
+      );
       const byId = new Map(rows.map((row) => [row.id, row]));
       return uniqueIds.map((id) => byId.get(id)).filter(Boolean) as OdooPlanProduct[];
     } catch (e: any) {
@@ -158,7 +200,9 @@ export class OdooGsmClient {
         '/productos/planes',
         { params: { companyId, q, limit } },
       );
-      return Array.isArray(data) ? data : [];
+      return (Array.isArray(data) ? data : []).map((row) =>
+        this.mapPlan(row as unknown as Record<string, unknown>),
+      );
     } catch (e: any) {
       const msg =
         e?.response?.data?.message ||
@@ -214,6 +258,31 @@ export class OdooGsmClient {
       this.logger.error(`listServiceTypes: ${msg}`);
       throw new ServiceUnavailableException(
         typeof msg === 'string' ? msg : 'Error al consultar tipos de servicio en Odoo',
+      );
+    }
+  }
+
+  async listConvenioCompanies() {
+    if (!this.http) {
+      throw new ServiceUnavailableException(
+        'Integración Odoo no configurada (API_ODOO_GSM_URL)',
+      );
+    }
+    try {
+      const { data } = await this.http.get<
+        Array<{ id: number; name: string; attention?: string | null }>
+      >('/productos/empresas-convenio');
+      return Array.isArray(data) ? data : [];
+    } catch (e: any) {
+      const msg =
+        e?.response?.data?.message ||
+        e?.message ||
+        'Error al consultar empresas de convenio';
+      this.logger.error(`listConvenioCompanies: ${msg}`);
+      throw new ServiceUnavailableException(
+        typeof msg === 'string'
+          ? msg
+          : 'Error al consultar empresas de convenio',
       );
     }
   }
@@ -293,6 +362,53 @@ export class OdooGsmClient {
       }
       throw new ServiceUnavailableException(
         typeof msg === 'string' ? msg : 'No se pudo leer el cliente',
+      );
+    }
+  }
+
+  async listClienteSuspendidas(id: number) {
+    return this.listClienteVentas(id, 'suspendidas');
+  }
+
+  async listClienteActivas(id: number) {
+    return this.listClienteVentas(id, 'activas');
+  }
+
+  private async listClienteVentas(
+    id: number,
+    kind: 'suspendidas' | 'activas',
+  ) {
+    if (!this.http) {
+      throw new ServiceUnavailableException(
+        'Búsqueda de clientes no configurada',
+      );
+    }
+    const label =
+      kind === 'activas' ? 'ventas activas' : 'ventas suspendidas';
+    try {
+      const { data } = await this.http.get<OdooVentasSuspendidas>(
+        `/clientes/${id}/${kind}`,
+      );
+      return {
+        titular: Array.isArray(data?.titular) ? data.titular : [],
+        beneficiario: Array.isArray(data?.beneficiario)
+          ? data.beneficiario
+          : [],
+      };
+    } catch (e: any) {
+      const status = e?.response?.status;
+      const msg =
+        e?.response?.data?.message ||
+        e?.message ||
+        `No se pudieron leer las ${label}`;
+      this.logger.error(`listClienteVentas(${kind}): ${msg}`);
+      if (status === 404 || status === 400) {
+        throw new BadRequestException(
+          typeof msg === 'string' ? msg : 'Cliente no encontrado',
+        );
+      }
+      throw new ServiceUnavailableException(
+        typeof msg === 'string' ? msg : `No se pudieron leer las ${label}`,
       );
     }
   }

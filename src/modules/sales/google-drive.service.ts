@@ -343,6 +343,11 @@ export class GoogleDriveService {
     documentos: Record<string, unknown>;
     /** Vista previa del contrato generada en el front (opcional). */
     caratulaPdf?: DriveAttachment | null;
+    cartaFacturaPdf?: DriveAttachment | null;
+    cartaNoFacturaPdf?: DriveAttachment | null;
+    reglamentoParquePdf?: DriveAttachment | null;
+    cartaAutorizacionPdf?: DriveAttachment | null;
+    tarjetaPdf?: DriveAttachment | null;
   }): Promise<{
     folderId: string;
     folderName: string;
@@ -351,7 +356,18 @@ export class GoogleDriveService {
   } | null> {
     if (!this.isEnabled()) return null;
 
-    const { saleId, titularName, fecha, documentos, caratulaPdf } = params;
+    const {
+      saleId,
+      titularName,
+      fecha,
+      documentos,
+      caratulaPdf,
+      cartaFacturaPdf,
+      cartaNoFacturaPdf,
+      reglamentoParquePdf,
+      cartaAutorizacionPdf,
+      tarjetaPdf,
+    } = params;
     const folio = String(saleId);
     const folder = await this.createSaleFolder({
       folio,
@@ -370,6 +386,7 @@ export class GoogleDriveService {
       { key: 'comprobanteDomicilio', label: 'Comprobante' },
       { key: 'constanciaSituacionFiscal', label: 'ConstanciaFiscal' },
       { key: 'ticketPago', label: 'Ticket' },
+      { key: 'comprobanteTransferencia', label: 'ComprobanteTransferencia' },
       { key: 'firmaCliente', label: 'Firma' },
     ];
 
@@ -410,6 +427,96 @@ export class GoogleDriveService {
         );
         files.push({
           key: 'caratulaPdf',
+          id: uploaded.id,
+          name: uploaded.name,
+          url: uploaded.webViewLink,
+        });
+      }
+    }
+
+    if (cartaFacturaPdf?.dataBase64) {
+      const buffer = this.bufferFromAttachment(cartaFacturaPdf);
+      if (buffer) {
+        const uploaded = await this.uploadBuffer(
+          folder.id,
+          `${folio}-CartaRequerimientoFactura.pdf`,
+          cartaFacturaPdf.mime || 'application/pdf',
+          buffer,
+        );
+        files.push({
+          key: 'cartaFacturaPdf',
+          id: uploaded.id,
+          name: uploaded.name,
+          url: uploaded.webViewLink,
+        });
+      }
+    }
+
+    if (cartaNoFacturaPdf?.dataBase64) {
+      const buffer = this.bufferFromAttachment(cartaNoFacturaPdf);
+      if (buffer) {
+        const uploaded = await this.uploadBuffer(
+          folder.id,
+          `${folio}-ConsentimientoNoFactura.pdf`,
+          cartaNoFacturaPdf.mime || 'application/pdf',
+          buffer,
+        );
+        files.push({
+          key: 'cartaNoFacturaPdf',
+          id: uploaded.id,
+          name: uploaded.name,
+          url: uploaded.webViewLink,
+        });
+      }
+    }
+
+    if (reglamentoParquePdf?.dataBase64) {
+      const buffer = this.bufferFromAttachment(reglamentoParquePdf);
+      if (buffer) {
+        const uploaded = await this.uploadBuffer(
+          folder.id,
+          `${folio}-ReglamentoParque.pdf`,
+          reglamentoParquePdf.mime || 'application/pdf',
+          buffer,
+        );
+        files.push({
+          key: 'reglamentoParquePdf',
+          id: uploaded.id,
+          name: uploaded.name,
+          url: uploaded.webViewLink,
+        });
+      }
+    }
+
+    if (cartaAutorizacionPdf?.dataBase64) {
+      const buffer = this.bufferFromAttachment(cartaAutorizacionPdf);
+      if (buffer) {
+        const uploaded = await this.uploadBuffer(
+          folder.id,
+          `${folio}-CartaAutorizacionCargoAutomatico.pdf`,
+          cartaAutorizacionPdf.mime || 'application/pdf',
+          buffer,
+        );
+        files.push({
+          key: 'cartaAutorizacionPdf',
+          id: uploaded.id,
+          name: uploaded.name,
+          url: uploaded.webViewLink,
+        });
+      }
+    }
+
+    if (tarjetaPdf?.dataBase64) {
+      const buffer = this.bufferFromAttachment(tarjetaPdf);
+      if (buffer) {
+        const uploaded = await this.uploadBuffer(
+          folder.id,
+          `${folio}-TarjetaAmbosLados.pdf`,
+          tarjetaPdf.mime || 'application/pdf',
+          buffer,
+        );
+        files.push({
+          key: 'tarjetaPdf',
           id: uploaded.id,
           name: uploaded.name,
           url: uploaded.webViewLink,

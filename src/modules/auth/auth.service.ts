@@ -24,6 +24,7 @@ export interface SessionUserView {
   fullName: string;
   type: UserType;
   permissions: string[];
+  nombreJefeVentas: string | null;
 }
 
 export interface AuthTokensResponse {
@@ -59,6 +60,7 @@ export class AuthService {
       fullName: user.fullName,
       type: user.type,
       permissions: this.permissionCodes(user),
+      nombreJefeVentas: user.nombreJefeVentas ?? null,
     };
   }
 

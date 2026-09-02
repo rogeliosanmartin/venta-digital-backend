@@ -63,6 +63,18 @@ export class OdooController {
     return this.odoo.searchClientes(q!.trim(), limit ? Number(limit) : 20);
   }
 
+  @Get('clientes/:id/suspendidas')
+  @Roles(UserType.VENDEDOR, UserType.MONITOR, UserType.ADMIN)
+  listClienteSuspendidas(@Param('id', ParseIntPipe) id: number) {
+    return this.odoo.listClienteSuspendidas(id);
+  }
+
+  @Get('clientes/:id/activas')
+  @Roles(UserType.VENDEDOR, UserType.MONITOR, UserType.ADMIN)
+  listClienteActivas(@Param('id', ParseIntPipe) id: number) {
+    return this.odoo.listClienteActivas(id);
+  }
+
   @Get('clientes/:id')
   @Roles(UserType.VENDEDOR, UserType.MONITOR, UserType.ADMIN)
   getCliente(@Param('id', ParseIntPipe) id: number) {
@@ -79,6 +91,12 @@ export class OdooController {
   @Roles(UserType.VENDEDOR, UserType.MONITOR, UserType.ADMIN)
   listTiposServicio() {
     return this.odoo.listServiceTypes();
+  }
+
+  @Get('empresas-convenio')
+  @Roles(UserType.VENDEDOR, UserType.MONITOR, UserType.ADMIN)
+  listEmpresasConvenio() {
+    return this.odoo.listConvenioCompanies();
   }
 
   @Get('ubicaciones/parques')

@@ -84,6 +84,10 @@ export class Sale {
   @Column({ type: 'varchar', length: 80, default: '' })
   verificacion!: string;
 
+  /** JSON de ventas suspendidas elegidas (reconocimiento de saldo). */
+  @Column({ name: 'reconocimiento_ventas', type: 'text', default: '' })
+  reconocimientoVentas!: string;
+
   // —— Plan ——
   @Column({ name: 'plan_kind', type: 'varchar', length: 20, default: PlanKind.PLAN_FUTURO })
   planKind!: PlanKind;
@@ -191,6 +195,36 @@ export class Sale {
 
   @Column({ type: 'varchar', length: 80, default: '' })
   banco!: string;
+
+  @Column({ name: 'cuenta_pago', type: 'varchar', length: 40, default: '' })
+  cuentaPago!: string;
+
+  @Column({ name: 'banco_pago', type: 'varchar', length: 80, default: '' })
+  bancoPago!: string;
+
+  @Column({ name: 'vencimiento_tarjeta', type: 'varchar', length: 7, default: '' })
+  vencimientoTarjeta!: string;
+
+  @Column({ name: 'titular_tarjeta', type: 'varchar', length: 120, default: '' })
+  titularTarjeta!: string;
+
+  @Column({ name: 'cvv', type: 'varchar', length: 4, default: '' })
+  cvv!: string;
+
+  @Column({ name: 'numero_empleado', type: 'varchar', length: 40, default: '' })
+  numeroEmpleado!: string;
+
+  @Column({ name: 'nombre_empleado', type: 'varchar', length: 160, default: '' })
+  nombreEmpleado!: string;
+
+  @Column({ name: 'empresa_nomina', type: 'varchar', length: 120, default: '' })
+  empresaNomina!: string;
+
+  @Column({ name: 'empresa_nomina_id', type: 'int', nullable: true })
+  empresaNominaId!: number | null;
+
+  @Column({ name: 'info_nomina', type: 'varchar', length: 200, default: '' })
+  infoNomina!: string;
 
   /** Solo pago en efectivo: billetes recibidos y cambio entregado. */
   @Column({ name: 'monto_recibido', type: 'varchar', length: 40, default: '' })

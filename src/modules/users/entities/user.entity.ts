@@ -46,6 +46,15 @@ export class User {
   @Column({ type: 'boolean', default: true })
   active: boolean;
 
+  /** Nombre del jefe de ventas. Solo aplica a VENDEDOR; va a la carátula. */
+  @Column({
+    name: 'nombre_jefe_ventas',
+    type: 'varchar',
+    length: 120,
+    nullable: true,
+  })
+  nombreJefeVentas: string | null;
+
   @OneToMany(() => UserPermission, (up) => up.user, { cascade: true })
   userPermissions: UserPermission[];
 
