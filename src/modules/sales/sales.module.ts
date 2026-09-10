@@ -18,6 +18,7 @@ import { AuditModule } from '../audit/audit.module';
 import { SettingsModule } from '../settings/settings.module';
 import { DiscountsModule } from '../discounts/discounts.module';
 import { OdooModule } from '../odoo/odoo.module';
+import { NotificationsModule } from '../notifications/notifications.module';
 
 @Module({
   imports: [
@@ -34,6 +35,7 @@ import { OdooModule } from '../odoo/odoo.module';
     SettingsModule,
     DiscountsModule,
     OdooModule,
+    NotificationsModule,
   ],
   controllers: [SalesController, DriveController, IntegrationsController],
   providers: [SalesService, SalesRepository, GoogleDriveService, ApiKeyGuard],

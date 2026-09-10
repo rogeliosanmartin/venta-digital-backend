@@ -87,6 +87,12 @@ export class OdooController {
     return this.odoo.listBranches();
   }
 
+  @Get('parentescos')
+  @Roles(UserType.VENDEDOR, UserType.MONITOR, UserType.ADMIN)
+  listParentescos() {
+    return this.odoo.listParentescos();
+  }
+
   @Get('tipos-servicio')
   @Roles(UserType.VENDEDOR, UserType.MONITOR, UserType.ADMIN)
   listTiposServicio() {

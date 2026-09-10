@@ -64,6 +64,45 @@ export class AuthService {
     };
   }
 
+  private isDevAuthBypass(): boolean {
+    return this.config.get<string>('NODE_ENV') === 'development';
+  }
+
+  /**
+   * Solo en development: inicia sesión de vendedor con el celular, sin PIN.
+   */
+  async loginSellerDev(cellphone: string): Promise<AuthTokensResponse> {
+    if (!this.isDevAuthBypass()) {
+      throw new UnauthorizedException('Login de desarrollo no disponible');
+    }
+
+    const seller =
+      await this.usersRepository.findActiveSellerByCellphoneWithPermissions(
+        cellphone,
+      );
+    if (!seller) {
+      throw new UnauthorizedException('Vendedor no encontrado o inactivo');
+    }
+
+    const expiresInSeconds = secondsUntilEndOfDay(this.businessTimezone);
+    const permissions = this.permissionCodes(seller);
+    const accessToken = this.jwtService.sign(
+      {
+        sub: seller.id,
+        type: seller.type,
+        permissions,
+        tokenUse: 'access',
+      },
+      { expiresIn: expiresInSeconds },
+    );
+
+    return {
+      accessToken,
+      expiresAt: endOfDayUtcIso(this.businessTimezone),
+      user: this.toUserView(seller),
+    };
+  }
+
   /**
    * Paso 1 vendedor: valida celular activo y solicita PIN por WhatsApp.
    */

@@ -310,6 +310,30 @@ export class OdooGsmClient {
     }
   }
 
+  /** Catálogo sale.order.relation (`sale.order.beneficiary.relation_id`). */
+  async listParentescos() {
+    if (!this.http) {
+      throw new ServiceUnavailableException(
+        'Integración Odoo no configurada (API_ODOO_GSM_URL)',
+      );
+    }
+    try {
+      const { data } = await this.http.get<Array<{ id: number; name: string }>>(
+        '/productos/parentescos',
+      );
+      return Array.isArray(data) ? data : [];
+    } catch (e: any) {
+      const msg =
+        e?.response?.data?.message ||
+        e?.message ||
+        'Error al consultar parentescos en Odoo';
+      this.logger.error(`listParentescos: ${msg}`);
+      throw new ServiceUnavailableException(
+        typeof msg === 'string' ? msg : 'Error al consultar parentescos en Odoo',
+      );
+    }
+  }
+
   async searchClientes(q: string, limit = 20) {
     if (!this.http) {
       throw new ServiceUnavailableException(

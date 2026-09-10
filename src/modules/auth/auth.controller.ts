@@ -30,6 +30,13 @@ export class AuthController {
     return this.authService.requestSellerPin(dto.cellphone);
   }
 
+  /** Solo development: sesión de vendedor con celular, sin PIN */
+  @Post('vendedor/login-dev')
+  @HttpCode(HttpStatus.OK)
+  loginSellerDev(@Body() dto: RequestSellerPinDto) {
+    return this.authService.loginSellerDev(dto.cellphone);
+  }
+
   /** Vendedor — valida PIN y obtiene sesión (token hasta fin del día) */
   @Post('vendedor/verificar-pin')
   @HttpCode(HttpStatus.OK)

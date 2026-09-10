@@ -345,9 +345,13 @@ export class GoogleDriveService {
     caratulaPdf?: DriveAttachment | null;
     cartaFacturaPdf?: DriveAttachment | null;
     cartaNoFacturaPdf?: DriveAttachment | null;
+    cartaExclusionesPdf?: DriveAttachment | null;
     reglamentoParquePdf?: DriveAttachment | null;
+    reglamentoParqueFolletoPdf?: DriveAttachment | null;
     cartaAutorizacionPdf?: DriveAttachment | null;
+    cartaNominaPdf?: DriveAttachment | null;
     tarjetaPdf?: DriveAttachment | null;
+    inePdf?: DriveAttachment | null;
   }): Promise<{
     folderId: string;
     folderName: string;
@@ -364,9 +368,13 @@ export class GoogleDriveService {
       caratulaPdf,
       cartaFacturaPdf,
       cartaNoFacturaPdf,
+      cartaExclusionesPdf,
       reglamentoParquePdf,
+      reglamentoParqueFolletoPdf,
       cartaAutorizacionPdf,
+      cartaNominaPdf,
       tarjetaPdf,
+      inePdf,
     } = params;
     const folio = String(saleId);
     const folder = await this.createSaleFolder({
@@ -382,12 +390,13 @@ export class GoogleDriveService {
     }[] = [];
 
     const entries: { key: string; label: string }[] = [
-      { key: 'ine', label: 'INE' },
       { key: 'comprobanteDomicilio', label: 'Comprobante' },
       { key: 'constanciaSituacionFiscal', label: 'ConstanciaFiscal' },
       { key: 'ticketPago', label: 'Ticket' },
       { key: 'comprobanteTransferencia', label: 'ComprobanteTransferencia' },
       { key: 'firmaCliente', label: 'Firma' },
+      { key: 'reciboNomina', label: 'ReciboNomina' },
+      { key: 'domiciliacionBanorte', label: 'DomiciliacionBanorte' },
     ];
 
     for (const { key, label } of entries) {
@@ -470,6 +479,24 @@ export class GoogleDriveService {
       }
     }
 
+    if (cartaExclusionesPdf?.dataBase64) {
+      const buffer = this.bufferFromAttachment(cartaExclusionesPdf);
+      if (buffer) {
+        const uploaded = await this.uploadBuffer(
+          folder.id,
+          `${folio}-CartaAceptacionExclusiones.pdf`,
+          cartaExclusionesPdf.mime || 'application/pdf',
+          buffer,
+        );
+        files.push({
+          key: 'cartaExclusionesPdf',
+          id: uploaded.id,
+          name: uploaded.name,
+          url: uploaded.webViewLink,
+        });
+      }
+    }
+
     if (reglamentoParquePdf?.dataBase64) {
       const buffer = this.bufferFromAttachment(reglamentoParquePdf);
       if (buffer) {
@@ -481,6 +508,24 @@ export class GoogleDriveService {
         );
         files.push({
           key: 'reglamentoParquePdf',
+          id: uploaded.id,
+          name: uploaded.name,
+          url: uploaded.webViewLink,
+        });
+      }
+    }
+
+    if (reglamentoParqueFolletoPdf?.dataBase64) {
+      const buffer = this.bufferFromAttachment(reglamentoParqueFolletoPdf);
+      if (buffer) {
+        const uploaded = await this.uploadBuffer(
+          folder.id,
+          `${folio}-ReglamentoParqueFolleto.pdf`,
+          reglamentoParqueFolletoPdf.mime || 'application/pdf',
+          buffer,
+        );
+        files.push({
+          key: 'reglamentoParqueFolletoPdf',
           id: uploaded.id,
           name: uploaded.name,
           url: uploaded.webViewLink,
@@ -506,6 +551,24 @@ export class GoogleDriveService {
       }
     }
 
+    if (cartaNominaPdf?.dataBase64) {
+      const buffer = this.bufferFromAttachment(cartaNominaPdf);
+      if (buffer) {
+        const uploaded = await this.uploadBuffer(
+          folder.id,
+          `${folio}-CartaConsentimientoNomina.pdf`,
+          cartaNominaPdf.mime || 'application/pdf',
+          buffer,
+        );
+        files.push({
+          key: 'cartaNominaPdf',
+          id: uploaded.id,
+          name: uploaded.name,
+          url: uploaded.webViewLink,
+        });
+      }
+    }
+
     if (tarjetaPdf?.dataBase64) {
       const buffer = this.bufferFromAttachment(tarjetaPdf);
       if (buffer) {
@@ -517,6 +580,24 @@ export class GoogleDriveService {
         );
         files.push({
           key: 'tarjetaPdf',
+          id: uploaded.id,
+          name: uploaded.name,
+          url: uploaded.webViewLink,
+        });
+      }
+    }
+
+    if (inePdf?.dataBase64) {
+      const buffer = this.bufferFromAttachment(inePdf);
+      if (buffer) {
+        const uploaded = await this.uploadBuffer(
+          folder.id,
+          `${folio}-INE-AmbosLados.pdf`,
+          inePdf.mime || 'application/pdf',
+          buffer,
+        );
+        files.push({
+          key: 'inePdf',
           id: uploaded.id,
           name: uploaded.name,
           url: uploaded.webViewLink,
@@ -546,18 +627,17 @@ export class GoogleDriveService {
     return this.uploadBuffer(this.folderId, fileName, mime, buffer);
   }
 
-  /** Busca la carátula ya subida en la carpeta de la venta (ventas firmadas antes del fix). */
-  async findCaratulaInFolder(
+  /** Busca un PDF de la venta en su carpeta de Drive. */
+  async findSalePdfInFolder(
     folderId: string,
-    saleId: number,
+    nameContains: string,
   ): Promise<{ id: string; name: string; url: string | null } | null> {
-    if (!this.drive || !folderId?.trim()) return null;
-    const folio = String(saleId);
+    if (!this.drive || !folderId?.trim() || !nameContains.trim()) return null;
     try {
       const res = await this.drive.files.list({
         q: [
           `'${folderId}' in parents`,
-          `name contains '${folio}-Caratula'`,
+          `name contains '${nameContains.replace(/'/g, "\\'")}'`,
           'trashed = false',
         ].join(' and '),
         fields: 'files(id, name, webViewLink)',
@@ -569,15 +649,23 @@ export class GoogleDriveService {
       if (!file?.id) return null;
       return {
         id: file.id,
-        name: file.name ?? `${folio}-Caratula.pdf`,
+        name: file.name ?? nameContains,
         url: file.webViewLink ?? null,
       };
     } catch (e) {
       this.logger.warn(
-        `Drive: no se pudo buscar carátula venta #${saleId}: ${(e as Error).message}`,
+        `Drive: no se pudo buscar ${nameContains}: ${(e as Error).message}`,
       );
       return null;
     }
+  }
+
+  /** Busca la carátula ya subida en la carpeta de la venta (ventas firmadas antes del fix). */
+  async findCaratulaInFolder(
+    folderId: string,
+    saleId: number,
+  ): Promise<{ id: string; name: string; url: string | null } | null> {
+    return this.findSalePdfInFolder(folderId, `${saleId}-Caratula`);
   }
 
   /** Descarga un archivo de Drive como base64 (p. ej. firma para vista previa). */

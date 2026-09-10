@@ -21,6 +21,7 @@ import { SettingsModule } from './modules/settings/settings.module';
 import { AppSettings } from './modules/settings/entities/app-settings.entity';
 import { OdooModule } from './modules/odoo/odoo.module';
 import { DiscountsModule } from './modules/discounts/discounts.module';
+import { NotificationsModule } from './modules/notifications/notifications.module';
 import { DiscountGrant } from './modules/discounts/entities/discount-grant.entity';
 import { SellerDefault } from './modules/users/entities/seller-default.entity';
 import { SellerDefaultPlan } from './modules/users/entities/seller-default-plan.entity';
@@ -76,6 +77,7 @@ import { TruncatingTypeOrmLogger } from './database/truncating-typeorm.logger';
     SettingsModule,
     OdooModule,
     DiscountsModule,
+    NotificationsModule,
   ],
 })
 export class AppModule {}

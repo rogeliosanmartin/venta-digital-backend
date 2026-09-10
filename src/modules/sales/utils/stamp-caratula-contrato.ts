@@ -1,17 +1,77 @@
 /**
- * Sella el folio CONTRATO sobre la carátula que ya generó jsPDF en el front.
- * Actualización incremental del PDF (fuentes estándar), sin librerías extra.
- *
- * Coordenadas = `fieldInline(..., 'CONTRATO:', ...)` en sale-pdf.ts
- * (jsPDF: origen arriba-izquierda, pt).
+ * Sella un folio sobre PDFs generados con jsPDF (fuentes estándar).
+ * Coordenadas = origen arriba-izquierda en pt, igual que el front.
  */
+import { DocumentKind } from '../enums/document-kind.enum';
 
-const CONTRATO_LABEL_X = 421;
-const CONTRATO_LABEL_W = 44;
-const CONTRATO_VALUE_Y = 100;
-const CONTRATO_MAX_W = 108;
-const BOX_TOP = 87.4;
-const BOX_H = 20.8;
+export type PdfTextStamp = {
+  pageIndex: number;
+  x: number;
+  y: number;
+  boxTop: number;
+  boxH: number;
+  maxW: number;
+  fontSize: number;
+};
+
+/** Huecos de “contrato / N° de contrato” en cada PDF de firma. */
+export const CONTRATO_STAMPS: Partial<Record<DocumentKind, PdfTextStamp>> = {
+  [DocumentKind.CARATULA]: {
+    pageIndex: 0,
+    x: 465,
+    y: 100,
+    boxTop: 87.4,
+    boxH: 20.8,
+    maxW: 108,
+    fontSize: 8,
+  },
+  [DocumentKind.CARTA_AUTORIZACION]: {
+    pageIndex: 0,
+    x: 382,
+    y: 112.5,
+    boxTop: 100,
+    boxH: 18,
+    maxW: 176,
+    fontSize: 8,
+  },
+  [DocumentKind.REGLAMENTO_PARQUE]: {
+    pageIndex: 0,
+    x: 204,
+    y: 543,
+    boxTop: 530,
+    boxH: 16,
+    maxW: 348,
+    fontSize: 11,
+  },
+  [DocumentKind.REGLAMENTO_FOLLETO]: {
+    pageIndex: 0,
+    x: 76,
+    y: 138,
+    boxTop: 126,
+    boxH: 14,
+    maxW: 180,
+    fontSize: 7,
+  },
+  [DocumentKind.CARTA_EXCLUSIONES]: {
+    pageIndex: 0,
+    x: 440,
+    y: 62,
+    boxTop: 50,
+    boxH: 14,
+    maxW: 118,
+    fontSize: 8.5,
+  },
+  [DocumentKind.CARTA_NOMINA]: {
+    pageIndex: 0,
+    x: 440,
+    y: 98,
+    boxTop: 86,
+    boxH: 14,
+    maxW: 118,
+    fontSize: 9,
+  },
+};
+
 const DEFAULT_PAGE_H = 1009.13;
 
 function extractDict(objRaw: string): string {
@@ -61,16 +121,23 @@ function parseTrailer(pdf: string): {
   return { size, root, startxref: Number(xrefOff[1]) };
 }
 
-function firstPageObjectNum(pdf: string, rootRef: string): number {
+function pageObjectNum(
+  pdf: string,
+  rootRef: string,
+  pageIndex: number,
+): number {
   const rootNum = Number(/^(\d+)/.exec(rootRef)?.[1]);
   const catalog = findObjectRaw(pdf, rootNum);
   const pagesNum = Number(/\/Pages\s+(\d+)\s+0\s+R/.exec(catalog)?.[1]);
   if (!pagesNum) throw new Error('Catalog sin Pages');
   const pages = findObjectRaw(pdf, pagesNum);
   const kids = /\/Kids\s*\[([^\]]+)\]/.exec(pages)?.[1];
-  const first = Number(/(\d+)\s+0\s+R/.exec(kids ?? '')?.[1]);
-  if (!first) throw new Error('Pages sin Kids');
-  return first;
+  const nums = [...(kids ?? '').matchAll(/(\d+)\s+0\s+R/g)].map((m) =>
+    Number(m[1]),
+  );
+  const pageNum = nums[pageIndex];
+  if (!pageNum) throw new Error(`PDF sin página ${pageIndex + 1}`);
+  return pageNum;
 }
 
 function pageHeight(pageDict: string): number {
@@ -148,21 +215,20 @@ function xrefEntry(offset: number): string {
   return `${String(offset).padStart(10, '0')} 00000 n \n`;
 }
 
-function stampOperators(folio: string, pageH: number): string {
-  const valueX = CONTRATO_LABEL_X + CONTRATO_LABEL_W;
-  const valueY = pageH - CONTRATO_VALUE_Y;
-  const rectY = pageH - (BOX_TOP + BOX_H) + 0.6;
+function stampOperators(folio: string, pageH: number, box: PdfTextStamp): string {
+  const valueY = pageH - box.y;
+  const rectY = pageH - (box.boxTop + box.boxH) + 0.6;
   const clipped = folio.slice(0, 24);
   return [
     'q',
     '0.980 0.988 0.992 rg',
-    `${valueX - 2} ${rectY} ${CONTRATO_MAX_W + 8} ${BOX_H - 1.2} re`,
+    `${box.x - 2} ${rectY} ${box.maxW + 8} ${box.boxH - 1.2} re`,
     'f',
     'Q',
     'BT',
-    '/VdC 8 Tf',
+    `/VdC ${box.fontSize} Tf`,
     '0.102 0.133 0.165 rg',
-    `${valueX} ${valueY} Td`,
+    `${box.x} ${valueY} Td`,
     `(${escapePdfString(clipped)}) Tj`,
     'ET',
     '',
@@ -173,23 +239,24 @@ function objectBody(num: number, dict: string): string {
   return `${num} 0 obj\n${dict}\nendobj\n`;
 }
 
-/** Escribe el folio de cotización en el hueco CONTRATO de la carátula. */
-export function stampContratoOnCaratulaPdf(
+/** Escribe texto en un hueco de un PDF jsPDF (página y caja dadas). */
+export function stampTextOnPdf(
   pdfBytes: Buffer,
-  contrato: string,
+  text: string,
+  box: PdfTextStamp,
 ): Buffer {
-  const folio = contrato.trim();
+  const folio = text.trim();
   if (!folio) return pdfBytes;
 
   const pdf = pdfBytes.toString('latin1');
   const { size, root, startxref } = parseTrailer(pdf);
-  const pageNum = firstPageObjectNum(pdf, root);
+  const pageNum = pageObjectNum(pdf, root, box.pageIndex);
   const pageRaw = findObjectRaw(pdf, pageNum);
   let pageDict = appendContents(extractDict(pageRaw), `${size + 1} 0 R`);
   const injected = injectFontResource(pdf, pageDict, `${size} 0 R`);
   pageDict = injected.pageDict;
   const pageH = pageHeight(pageDict);
-  const ops = stampOperators(folio, pageH);
+  const ops = stampOperators(folio, pageH, box);
 
   const parts: { num: number; body: string }[] = [
     ...injected.rewritten.map((item) => ({
@@ -238,4 +305,16 @@ export function stampContratoOnCaratulaPdf(
 
   chunks.push(Buffer.from(bodies.join('') + xref + trailer, 'latin1'));
   return Buffer.concat(chunks);
+}
+
+/** Folio CONTRATO en la carátula (hueco de sale-pdf.ts). */
+export function stampContratoOnCaratulaPdf(
+  pdfBytes: Buffer,
+  contrato: string,
+): Buffer {
+  return stampTextOnPdf(
+    pdfBytes,
+    contrato,
+    CONTRATO_STAMPS[DocumentKind.CARATULA]!,
+  );
 }

@@ -8,9 +8,36 @@ import { DocumentKind } from '../enums/document-kind.enum';
 import { PlanKind } from '../enums/plan-kind.enum';
 import { SaleFormPayloadDto } from '../dto/sale-form.dto';
 import { normalizeMxPhone } from '../utils/phone';
+import { formatDigitalFolio } from '../utils/digital-folio';
 
 function s(v: unknown, fallback = ''): string {
   return v == null ? fallback : String(v).trim();
+}
+
+function isNominaTipo(raw?: string | null): boolean {
+  const t = s(raw).toUpperCase();
+  return t === 'NOMINA' || t === 'NÓMINA';
+}
+
+export function isUasConvenioPago(pago?: {
+  empresaNominaId?: number | null;
+  empresaNomina?: string | null;
+} | null): boolean {
+  const id = Number(pago?.empresaNominaId);
+  if (Number.isFinite(id) && id === 1) return true;
+  return s(pago?.empresaNomina).toUpperCase() === 'UAS';
+}
+
+export function needsCardDocumentos(
+  tipoCobranza?: string | null,
+  pago?: {
+    empresaNominaId?: number | null;
+    empresaNomina?: string | null;
+  } | null,
+): boolean {
+  const tipo = s(tipoCobranza).toUpperCase();
+  if (tipo === 'DOMICILIADO') return true;
+  return isNominaTipo(tipo) && isUasConvenioPago(pago);
 }
 
 function tipoVentaFromEstatus(estatus: string): string {
@@ -199,7 +226,7 @@ export function saleToPayload(sale: Sale): Record<string, unknown> {
       branchName: sale.branchName,
       serviceTypeId: sale.serviceTypeId,
       serviceTypeName: sale.serviceTypeName,
-      folioSolicitud: sale.folioSolicitud || String(sale.id),
+      folioSolicitud: formatDigitalFolio(sale.folioSolicitud || sale.id),
       fechaServicio: sale.fechaServicio ?? '',
       tipoVenta: tipoVentaFromEstatus(sale.estatus),
       estatus: sale.estatus,
@@ -247,6 +274,7 @@ export function saleToPayload(sale: Sale): Record<string, unknown> {
           nombres: sc.nombres,
           celular: sc.celular,
           parentesco: sc.parentesco,
+          relationId: sc.relationId ?? null,
           direccion: sc.direccion,
           colonia: sc.colonia,
           cp: sc.cp,
@@ -313,20 +341,27 @@ export function saleToPayload(sale: Sale): Record<string, unknown> {
       aceptaPublicidad: sale.aceptaPublicidad,
     },
     documentos: {
-      ine: findDoc(DocumentKind.INE),
+      ineFrente: findDoc(DocumentKind.INE_FRENTE),
+      ineReverso: findDoc(DocumentKind.INE_REVERSO),
+      inePdf: findDoc(DocumentKind.INE),
       comprobanteDomicilio: findDoc(DocumentKind.COMPROBANTE),
       constanciaSituacionFiscal: findDoc(DocumentKind.CONSTANCIA_FISCAL),
       tarjetaFrente: findDoc(DocumentKind.TARJETA_FRENTE),
       tarjetaReverso: findDoc(DocumentKind.TARJETA_REVERSO),
       tarjetaPdf: findDoc(DocumentKind.TARJETA),
+      reciboNomina: findDoc(DocumentKind.RECIBO_NOMINA),
+      domiciliacionBanorte: findDoc(DocumentKind.BANORTE_DOM),
       firmaCliente: findDoc(DocumentKind.FIRMA),
       ticketPago: findDoc(DocumentKind.TICKET_PAGO),
       comprobanteTransferencia: findDoc(DocumentKind.COMP_TRANSFERENCIA),
       caratulaPdf: findDoc(DocumentKind.CARATULA),
       cartaFacturaPdf: findDoc(DocumentKind.CARTA_FACTURA),
       cartaNoFacturaPdf: findDoc(DocumentKind.CARTA_NO_FACTURA),
+      cartaExclusionesPdf: findDoc(DocumentKind.CARTA_EXCLUSIONES),
       reglamentoParquePdf: findDoc(DocumentKind.REGLAMENTO_PARQUE),
+      reglamentoParqueFolletoPdf: findDoc(DocumentKind.REGLAMENTO_FOLLETO),
       cartaAutorizacionPdf: findDoc(DocumentKind.CARTA_AUTORIZACION),
+      cartaNominaPdf: findDoc(DocumentKind.CARTA_NOMINA),
     },
   };
 }
@@ -337,6 +372,7 @@ function emptyBen() {
     apellidoMaterno: '',
     nombres: '',
     parentesco: '',
+    relationId: null as number | null,
     celular: '',
     fechaNacimiento: '',
   };
@@ -349,6 +385,7 @@ function benToPayload(b: SaleBeneficiary | null | undefined) {
     apellidoMaterno: b.apellidoMaterno,
     nombres: b.nombres,
     parentesco: b.parentesco,
+    relationId: b.relationId ?? null,
     celular: b.celular,
     fechaNacimiento: b.fechaNacimiento ?? '',
   };
@@ -361,6 +398,7 @@ function substituteToPayload(sh: SaleSubstituteHolder | null | undefined) {
     apellidoMaterno: sh.apellidoMaterno,
     nombres: sh.nombres,
     parentesco: sh.parentesco,
+    relationId: sh.relationId ?? null,
     celular: sh.celular,
     fechaNacimiento: sh.fechaNacimiento ?? '',
   };
@@ -373,6 +411,7 @@ function applyBenPayload(
     apellidoMaterno?: string;
     nombres?: string;
     parentesco?: string;
+    relationId?: number | null;
     celular?: string;
     fechaNacimiento?: string;
   },
@@ -381,6 +420,10 @@ function applyBenPayload(
   row.apellidoMaterno = s(b.apellidoMaterno);
   row.nombres = s(b.nombres);
   row.parentesco = s(b.parentesco);
+  row.relationId =
+    b.relationId != null && Number(b.relationId) > 0
+      ? Number(b.relationId)
+      : null;
   row.celular = normalizeMxPhone(b.celular);
   row.fechaNacimiento = dateOrNull(b.fechaNacimiento);
 }
@@ -396,7 +439,16 @@ export function saleToAuditSnapshot(sale: Sale): Record<string, unknown> {
   );
   const docs = sale.documents ?? [];
   const docLabels: string[] = [];
-  if (docs.some((d) => d.kind === DocumentKind.INE)) docLabels.push('INE');
+  if (docs.some((d) => d.kind === DocumentKind.INE)) {
+    docLabels.push('INE (ambos lados)');
+  } else {
+    if (docs.some((d) => d.kind === DocumentKind.INE_FRENTE)) {
+      docLabels.push('INE (frente)');
+    }
+    if (docs.some((d) => d.kind === DocumentKind.INE_REVERSO)) {
+      docLabels.push('INE (reverso)');
+    }
+  }
   if (docs.some((d) => d.kind === DocumentKind.COMPROBANTE)) {
     docLabels.push('Comprobante de domicilio');
   }
@@ -431,11 +483,26 @@ export function saleToAuditSnapshot(sale: Sale): Record<string, unknown> {
   if (docs.some((d) => d.kind === DocumentKind.CARTA_NO_FACTURA)) {
     docLabels.push('Consentimiento de no factura');
   }
+  if (docs.some((d) => d.kind === DocumentKind.CARTA_EXCLUSIONES)) {
+    docLabels.push('Carta de aceptación de exclusiones');
+  }
   if (docs.some((d) => d.kind === DocumentKind.REGLAMENTO_PARQUE)) {
     docLabels.push('Reglamento de parque');
   }
+  if (docs.some((d) => d.kind === DocumentKind.REGLAMENTO_FOLLETO)) {
+    docLabels.push('Reglamento de parque (artículos)');
+  }
   if (docs.some((d) => d.kind === DocumentKind.CARTA_AUTORIZACION)) {
     docLabels.push('Carta de autorización');
+  }
+  if (docs.some((d) => d.kind === DocumentKind.CARTA_NOMINA)) {
+    docLabels.push('Carta de consentimiento (nómina)');
+  }
+  if (docs.some((d) => d.kind === DocumentKind.RECIBO_NOMINA)) {
+    docLabels.push('Recibo de nómina más actual');
+  }
+  if (docs.some((d) => d.kind === DocumentKind.BANORTE_DOM)) {
+    docLabels.push('Documento de domiciliación Banorte');
   }
   const docsOnDrive = docs.filter((d) => d.driveFileId).length;
 
@@ -449,7 +516,7 @@ export function saleToAuditSnapshot(sale: Sale): Record<string, unknown> {
     origenVenta: sale.origenVenta,
     sucursal: sale.branchName || sale.branchId,
     tipoServicio: sale.serviceTypeName || sale.serviceTypeId,
-    folioSolicitud: sale.folioSolicitud || String(sale.id),
+    folioSolicitud: formatDigitalFolio(sale.folioSolicitud || sale.id),
     curp: h?.curp ?? '',
     celular: h?.celular1 ?? '',
     correo: h?.correo ?? '',
@@ -524,7 +591,7 @@ export function applyPayloadToSale(sale: Sale, payload: SaleFormPayloadDto) {
   sale.branchName = s(meta.branchName);
   sale.serviceTypeId = optionalInt(meta.serviceTypeId);
   sale.serviceTypeName = s(meta.serviceTypeName);
-  // folioSolicitud: lo asigna el servidor (= id de venta)
+  // folioSolicitud: lo asigna el servidor (D-{id de venta})
   sale.fechaServicio = dateOrNull(meta.fechaServicio);
   sale.estatus =
     estatusFromTipoVenta(meta.tipoVenta) || s(meta.estatus, 'ACTIVO');
@@ -651,6 +718,10 @@ export function applyPayloadToSale(sale: Sale, payload: SaleFormPayloadDto) {
   s2.nombres = s(sc.nombres);
   s2.celular = normalizeMxPhone(sc.celular);
   s2.parentesco = s(sc.parentesco);
+  s2.relationId =
+    sc.relationId != null && Number(sc.relationId) > 0
+      ? Number(sc.relationId)
+      : null;
   s2.direccion = s(sc.direccion);
   s2.colonia = s(sc.colonia);
   s2.cp = s(sc.cp);
@@ -687,6 +758,10 @@ export function applyPayloadToSale(sale: Sale, payload: SaleFormPayloadDto) {
     row.apellidoMaterno = s(b.apellidoMaterno);
     row.nombres = s(b.nombres);
     row.parentesco = s(b.parentesco);
+    row.relationId =
+      b.relationId != null && Number(b.relationId) > 0
+        ? Number(b.relationId)
+        : null;
     row.celular = normalizeMxPhone(b.celular);
     row.fechaNacimiento = dateOrNull(b.fechaNacimiento);
     beneficiaries.push(row);
@@ -725,12 +800,26 @@ export function applyPayloadToSale(sale: Sale, payload: SaleFormPayloadDto) {
     d.driveFileUrl = null;
     docs.push(d);
   };
-  pushDoc(DocumentKind.INE, payload.documentos?.ine);
+  pushDoc(DocumentKind.INE_FRENTE, payload.documentos?.ineFrente);
+  pushDoc(DocumentKind.INE_REVERSO, payload.documentos?.ineReverso);
+  pushDoc(
+    DocumentKind.INE,
+    payload.documentos?.inePdf ?? payload.documentos?.ine,
+  );
   pushDoc(DocumentKind.COMPROBANTE, payload.documentos?.comprobanteDomicilio);
-  if (s(c.tipoCobranza).toUpperCase() === 'DOMICILIADO') {
+  if (needsCardDocumentos(c.tipoCobranza, payload.pago)) {
     pushDoc(DocumentKind.TARJETA_FRENTE, payload.documentos?.tarjetaFrente);
     pushDoc(DocumentKind.TARJETA_REVERSO, payload.documentos?.tarjetaReverso);
     pushDoc(DocumentKind.TARJETA, payload.documentos?.tarjetaPdf);
+  }
+  if (isNominaTipo(c.tipoCobranza)) {
+    pushDoc(DocumentKind.RECIBO_NOMINA, payload.documentos?.reciboNomina);
+    if (isUasConvenioPago(payload.pago)) {
+      pushDoc(
+        DocumentKind.BANORTE_DOM,
+        payload.documentos?.domiciliacionBanorte,
+      );
+    }
   }
   if (s(c.factura).toUpperCase() === 'SI') {
     pushDoc(

@@ -32,6 +32,10 @@ export class SaleSubstituteHolder {
   @Column({ type: 'varchar', length: 80, default: '' })
   parentesco!: string;
 
+  /** Id Odoo `sale.order.relation` (`relation_id`). */
+  @Column({ name: 'relation_id', type: 'int', nullable: true })
+  relationId!: number | null;
+
   @Column({ type: 'varchar', length: 20, default: '' })
   celular!: string;
 

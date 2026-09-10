@@ -60,6 +60,7 @@ export class SaleContactoDto extends SalePersonDto {
 export class SaleSegundoDto extends SalePersonDto {
   @IsOptional() @IsString() celular?: string;
   @IsOptional() @IsString() parentesco?: string;
+  @IsOptional() @Type(() => Number) @IsInt() relationId?: number | null;
   @IsOptional() @IsString() direccion?: string;
   @IsOptional() @IsString() colonia?: string;
   @IsOptional() @IsString() cp?: string;
@@ -70,6 +71,7 @@ export class SaleSegundoDto extends SalePersonDto {
 
 export class SaleBeneficiaryDto extends SalePersonDto {
   @IsOptional() @IsString() parentesco?: string;
+  @IsOptional() @Type(() => Number) @IsInt() relationId?: number | null;
   @IsOptional() @IsString() celular?: string;
   @IsOptional() @IsString() fechaNacimiento?: string;
 }
@@ -216,12 +218,18 @@ export class SaleFormPayloadDto {
   @IsOptional()
   @IsObject()
   documentos?: {
+    ineFrente?: SaleAttachmentDto | null;
+    ineReverso?: SaleAttachmentDto | null;
+    inePdf?: SaleAttachmentDto | null;
+    /** @deprecated ventas antiguas */
     ine?: SaleAttachmentDto | null;
     comprobanteDomicilio?: SaleAttachmentDto | null;
     constanciaSituacionFiscal?: SaleAttachmentDto | null;
     tarjetaFrente?: SaleAttachmentDto | null;
     tarjetaReverso?: SaleAttachmentDto | null;
     tarjetaPdf?: SaleAttachmentDto | null;
+    reciboNomina?: SaleAttachmentDto | null;
+    domiciliacionBanorte?: SaleAttachmentDto | null;
     firmaCliente?: SaleAttachmentDto | null;
     ticketPago?: SaleAttachmentDto | null;
     comprobanteTransferencia?: SaleAttachmentDto | null;
@@ -284,11 +292,23 @@ export class SignSaleDto {
   @Type(() => SaleAttachmentDto)
   cartaNoFacturaPdf?: SaleAttachmentDto | null;
 
-  /** Reglamento de parque (PDF generado en el front). */
+  /** Carta de aceptación de exclusiones (Anexo A). */
+  @IsOptional()
+  @ValidateNested()
+  @Type(() => SaleAttachmentDto)
+  cartaExclusionesPdf?: SaleAttachmentDto | null;
+
+  /** Reglamento de parque (carta de reglas). */
   @IsOptional()
   @ValidateNested()
   @Type(() => SaleAttachmentDto)
   reglamentoParquePdf?: SaleAttachmentDto | null;
+
+  /** Folleto de artículos del reglamento de parque. */
+  @IsOptional()
+  @ValidateNested()
+  @Type(() => SaleAttachmentDto)
+  reglamentoParqueFolletoPdf?: SaleAttachmentDto | null;
 
   /** Carta de autorización de cargo automático (domiciliación). */
   @IsOptional()
@@ -296,9 +316,21 @@ export class SignSaleDto {
   @Type(() => SaleAttachmentDto)
   cartaAutorizacionPdf?: SaleAttachmentDto | null;
 
+  /** Carta de consentimiento / descuento nómina (FO-GEN-SMGF-05). */
+  @IsOptional()
+  @ValidateNested()
+  @Type(() => SaleAttachmentDto)
+  cartaNominaPdf?: SaleAttachmentDto | null;
+
   /** PDF de una hoja con frente y reverso de la tarjeta. */
   @IsOptional()
   @ValidateNested()
   @Type(() => SaleAttachmentDto)
   tarjetaPdf?: SaleAttachmentDto | null;
+
+  /** PDF de una hoja con frente y reverso de la INE. */
+  @IsOptional()
+  @ValidateNested()
+  @Type(() => SaleAttachmentDto)
+  inePdf?: SaleAttachmentDto | null;
 }

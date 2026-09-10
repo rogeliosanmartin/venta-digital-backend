@@ -35,6 +35,10 @@ export class SaleSecondContact {
   @Column({ type: 'varchar', length: 80, default: '' })
   parentesco!: string;
 
+  /** Id Odoo `sale.order.relation`. */
+  @Column({ name: 'relation_id', type: 'int', nullable: true })
+  relationId!: number | null;
+
   @Column({ type: 'varchar', length: 220, default: '' })
   direccion!: string;
 

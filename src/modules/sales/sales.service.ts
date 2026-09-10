@@ -17,6 +17,7 @@ import { Sale } from './entities/sale.entity';
 import { AuthUserPayload } from '../../common/decorators/current-user.decorator';
 import { UserType } from '../../common/enums/user-type.enum';
 import { GoogleDriveService } from './google-drive.service';
+import { TicketNotificationService } from '../notifications/ticket-notification.service';
 import {
   SavePaymentDto,
   SignSaleDto,
@@ -26,6 +27,8 @@ import {
   applyPayloadToSale,
   computeSaldo,
   fullName,
+  isUasConvenioPago,
+  needsCardDocumentos,
   realContrato,
   recognizedFromVentas,
   saleToAuditSnapshot,
@@ -40,7 +43,8 @@ import { SettingsService } from '../settings/settings.service';
 import { DiscountsService } from '../discounts/discounts.service';
 import { OdooGsmClient } from '../odoo/odoo-gsm.client';
 import { PlanKind } from './enums/plan-kind.enum';
-import { stampContratoOnCaratulaPdf } from './utils/stamp-caratula-contrato';
+import { CONTRATO_STAMPS, stampTextOnPdf } from './utils/stamp-caratula-contrato';
+import { formatDigitalFolio } from './utils/digital-folio';
 
 @Injectable()
 export class SalesService {
@@ -54,6 +58,7 @@ export class SalesService {
     private readonly settingsService: SettingsService,
     private readonly discountsService: DiscountsService,
     private readonly odooGsm: OdooGsmClient,
+    private readonly ticketNotifications: TicketNotificationService,
   ) {}
 
   private parseMoney(v: unknown): number {
@@ -89,9 +94,9 @@ export class SalesService {
     );
   }
 
-  /** Folio de solicitud = id de venta (consecutivo natural de la tabla). */
+  /** Folio de solicitud = D-{id de venta}. */
   private async syncFolioSolicitud(sale: Sale) {
-    const folio = String(sale.id);
+    const folio = formatDigitalFolio(sale.id);
     if (sale.folioSolicitud === folio) return;
     sale.folioSolicitud = folio;
     await this.salesRepository.saveWithoutDocuments(sale);
@@ -306,18 +311,40 @@ export class SalesService {
     }
 
     if (strictDocs) {
-      if (!payload.documentos?.ine || !payload.documentos?.comprobanteDomicilio) {
+      const hasIne =
+        (payload.documentos?.ineFrente &&
+          payload.documentos?.ineReverso) ||
+        payload.documentos?.inePdf ||
+        payload.documentos?.ine;
+      if (!hasIne || !payload.documentos?.comprobanteDomicilio) {
         throw new BadRequestException(
-          'Debes adjuntar INE y comprobante de domicilio',
+          'Debes adjuntar INE (frente y reverso) y comprobante de domicilio',
         );
       }
-      if (cobranza === 'DOMICILIADO') {
+      if (needsCardDocumentos(cobranza, pago)) {
         if (
           !payload.documentos?.tarjetaFrente ||
           !payload.documentos?.tarjetaReverso
         ) {
           throw new BadRequestException(
-            'En domiciliación debes adjuntar el frente y el reverso de la tarjeta',
+            cobranza === 'DOMICILIADO'
+              ? 'En domiciliación debes adjuntar el frente y el reverso de la tarjeta'
+              : 'En UAS debes adjuntar el frente y el reverso de la tarjeta',
+          );
+        }
+      }
+      if (cobranza === 'NOMINA' || cobranza === 'NÓMINA') {
+        if (!payload.documentos?.reciboNomina) {
+          throw new BadRequestException(
+            'En nómina debes adjuntar el recibo de nómina más actual',
+          );
+        }
+        if (
+          isUasConvenioPago(pago) &&
+          !payload.documentos?.domiciliacionBanorte
+        ) {
+          throw new BadRequestException(
+            'En UAS debes adjuntar el documento de domiciliación Banorte',
           );
         }
       }
@@ -676,7 +703,7 @@ export class SalesService {
     }
     await this.salesRepository.saveWithoutDocuments(sale);
     if (quoteName) {
-      await this.refreshCaratulaContratoOnDrive(sale, quoteName);
+      await this.refreshContratoOnDriveDocuments(sale, quoteName);
     }
     return {
       id: sale.id,
@@ -686,63 +713,74 @@ export class SalesService {
   }
 
   /**
-   * Tras generar cotización, el folio (`sale.order.name`) debe verse en la
-   * carátula de Drive. Se sella sobre el PDF ya firmado (mismo archivo).
+   * Tras generar cotización, el folio (`sale.order.name`) se sella en todos
+   * los PDFs que muestran número de contrato (mismo archivo en Drive).
    */
-  private async refreshCaratulaContratoOnDrive(sale: Sale, contrato: string) {
+  private async refreshContratoOnDriveDocuments(sale: Sale, contrato: string) {
     if (!this.googleDrive.isEnabled()) return;
 
-    const existing = (sale.documents ?? []).find(
-      (d) => d.kind === DocumentKind.CARATULA,
-    );
-    let fileId = existing?.driveFileId ?? null;
-    if (!fileId && sale.driveFolderId) {
-      const found = await this.googleDrive.findCaratulaInFolder(
-        sale.driveFolderId,
-        sale.id,
-      );
-      fileId = found?.id ?? null;
-      if (found && !existing) {
-        const doc = new SaleDocument();
-        doc.kind = DocumentKind.CARATULA;
-        doc.name = found.name;
-        doc.mime = 'application/pdf';
-        doc.driveFileId = found.id;
-        doc.driveFileUrl = found.url;
-        doc.dataBase64 = null;
-        doc.saleId = sale.id;
-        await this.salesRepository.saveDocument(doc);
-      }
-    }
-    if (!fileId) {
-      this.logger.warn(
-        `Venta #${sale.id}: cotización ${contrato} sin carátula en Drive; no se actualizó el folio`,
-      );
-      return;
-    }
+    const driveHint: Partial<Record<DocumentKind, string>> = {
+      [DocumentKind.CARATULA]: `${sale.id}-Caratula`,
+      [DocumentKind.CARTA_EXCLUSIONES]: 'CartaAceptacionExclusiones',
+      [DocumentKind.REGLAMENTO_PARQUE]: 'ReglamentoParque.pdf',
+      [DocumentKind.REGLAMENTO_FOLLETO]: 'ReglamentoParqueFolleto',
+      [DocumentKind.CARTA_AUTORIZACION]: 'CartaAutorizacion',
+      [DocumentKind.CARTA_NOMINA]: 'CartaConsentimientoNomina',
+    };
 
-    try {
-      const downloaded = await this.googleDrive.downloadFileBase64(fileId);
-      if (!downloaded?.dataBase64) {
-        throw new Error('No se pudo descargar la carátula');
+    for (const [kind, stamp] of Object.entries(CONTRATO_STAMPS)) {
+      const docKind = kind as DocumentKind;
+      const existing = (sale.documents ?? []).find((d) => d.kind === docKind);
+      let fileId = existing?.driveFileId ?? null;
+      if (!fileId && sale.driveFolderId) {
+        const hint = driveHint[docKind];
+        const found = hint
+          ? await this.googleDrive.findSalePdfInFolder(sale.driveFolderId, hint)
+          : null;
+        fileId = found?.id ?? null;
+        if (found && !existing) {
+          const doc = new SaleDocument();
+          doc.kind = docKind;
+          doc.name = found.name;
+          doc.mime = 'application/pdf';
+          doc.driveFileId = found.id;
+          doc.driveFileUrl = found.url;
+          doc.dataBase64 = null;
+          doc.saleId = sale.id;
+          await this.salesRepository.saveDocument(doc);
+        }
       }
-      const stamped = stampContratoOnCaratulaPdf(
-        Buffer.from(downloaded.dataBase64, 'base64'),
-        contrato,
-      );
-      await this.googleDrive.updateFileBuffer(
-        fileId,
-        'application/pdf',
-        stamped,
-      );
-      this.logger.log(
-        `Venta #${sale.id}: carátula Drive actualizada con contrato ${contrato}`,
-      );
-    } catch (e) {
-      this.logger.error(
-        `Venta #${sale.id}: no se actualizó carátula en Drive — ${(e as Error).message}`,
-        (e as Error).stack,
-      );
+      if (!fileId) {
+        this.logger.warn(
+          `Venta #${sale.id}: cotización ${contrato} sin ${docKind} en Drive; no se actualizó el folio`,
+        );
+        continue;
+      }
+
+      try {
+        const downloaded = await this.googleDrive.downloadFileBase64(fileId);
+        if (!downloaded?.dataBase64) {
+          throw new Error(`No se pudo descargar ${docKind}`);
+        }
+        const stamped = stampTextOnPdf(
+          Buffer.from(downloaded.dataBase64, 'base64'),
+          contrato,
+          stamp,
+        );
+        await this.googleDrive.updateFileBuffer(
+          fileId,
+          'application/pdf',
+          stamped,
+        );
+        this.logger.log(
+          `Venta #${sale.id}: ${docKind} Drive actualizado con contrato ${contrato}`,
+        );
+      } catch (e) {
+        this.logger.error(
+          `Venta #${sale.id}: no se actualizó ${docKind} en Drive — ${(e as Error).message}`,
+          (e as Error).stack,
+        );
+      }
     }
   }
 
@@ -824,7 +862,7 @@ export class SalesService {
     await this.assertDiscountAndSaldo(sale, user.userId);
     if (dto.titularName?.trim()) sale.titularName = dto.titularName.trim();
     sale.draftExpiresAt = await this.draftExpiry();
-    sale.folioSolicitud = String(sale.id);
+    sale.folioSolicitud = formatDigitalFolio(sale.id);
     const saved = await this.salesRepository.save(sale);
     return saleToPublic(saved);
   }
@@ -1088,6 +1126,22 @@ export class SalesService {
 
     const odooSync = await this.syncReceptionToOdoo(sale.id);
     sale.odooReceptionSynced = odooSync.synced;
+
+    try {
+      await this.ticketNotifications.sendPaymentTicket({
+        customerName: titular,
+        amount: dueNum,
+        phone: sale.holder?.celular1,
+        email: sale.holder?.correo,
+        pdfBase64: dto.ticketPdf?.dataBase64,
+        pdfName: dto.ticketPdf?.name || `${sale.id}-TicketPago.pdf`,
+      });
+    } catch (e) {
+      this.logger.error(
+        `Venta #${sale.id}: no se envió el ticket por SMS/WhatsApp/correo — ${(e as Error).message}`,
+      );
+    }
+
     return {
       ...saleToPublic(sale),
       odooSyncError: odooSync.error ?? null,
@@ -1163,6 +1217,22 @@ export class SalesService {
       if (!prevNoFactura) docs.push(noFactura);
     }
 
+    if (dto.cartaExclusionesPdf?.dataBase64) {
+      const prevExcl = docs.find(
+        (d) => d.kind === DocumentKind.CARTA_EXCLUSIONES,
+      );
+      const exclusiones = prevExcl ?? new SaleDocument();
+      exclusiones.kind = DocumentKind.CARTA_EXCLUSIONES;
+      exclusiones.name =
+        dto.cartaExclusionesPdf.name ||
+        `${sale.id}-CartaAceptacionExclusiones.pdf`;
+      exclusiones.mime = dto.cartaExclusionesPdf.mime || 'application/pdf';
+      exclusiones.dataBase64 = dto.cartaExclusionesPdf.dataBase64;
+      exclusiones.driveFileId = null;
+      exclusiones.driveFileUrl = null;
+      if (!prevExcl) docs.push(exclusiones);
+    }
+
     if (dto.reglamentoParquePdf?.dataBase64) {
       const prevReglamento = docs.find(
         (d) => d.kind === DocumentKind.REGLAMENTO_PARQUE,
@@ -1176,6 +1246,22 @@ export class SalesService {
       reglamento.driveFileId = null;
       reglamento.driveFileUrl = null;
       if (!prevReglamento) docs.push(reglamento);
+    }
+
+    if (dto.reglamentoParqueFolletoPdf?.dataBase64) {
+      const prevFolleto = docs.find(
+        (d) => d.kind === DocumentKind.REGLAMENTO_FOLLETO,
+      );
+      const folleto = prevFolleto ?? new SaleDocument();
+      folleto.kind = DocumentKind.REGLAMENTO_FOLLETO;
+      folleto.name =
+        dto.reglamentoParqueFolletoPdf.name ||
+        `${sale.id}-ReglamentoParqueFolleto.pdf`;
+      folleto.mime = dto.reglamentoParqueFolletoPdf.mime || 'application/pdf';
+      folleto.dataBase64 = dto.reglamentoParqueFolletoPdf.dataBase64;
+      folleto.driveFileId = null;
+      folleto.driveFileUrl = null;
+      if (!prevFolleto) docs.push(folleto);
     }
 
     if (dto.cartaAutorizacionPdf?.dataBase64) {
@@ -1192,6 +1278,20 @@ export class SalesService {
       if (!prevAuth) docs.push(authDoc);
     }
 
+    if (dto.cartaNominaPdf?.dataBase64) {
+      const prevNomina = docs.find((d) => d.kind === DocumentKind.CARTA_NOMINA);
+      const nominaDoc = prevNomina ?? new SaleDocument();
+      nominaDoc.kind = DocumentKind.CARTA_NOMINA;
+      nominaDoc.name =
+        dto.cartaNominaPdf.name ||
+        `${sale.id}-CartaConsentimientoNomina.pdf`;
+      nominaDoc.mime = dto.cartaNominaPdf.mime || 'application/pdf';
+      nominaDoc.dataBase64 = dto.cartaNominaPdf.dataBase64;
+      nominaDoc.driveFileId = null;
+      nominaDoc.driveFileUrl = null;
+      if (!prevNomina) docs.push(nominaDoc);
+    }
+
     if (dto.tarjetaPdf?.dataBase64) {
       const prevCard = docs.find((d) => d.kind === DocumentKind.TARJETA);
       const cardDoc = prevCard ?? new SaleDocument();
@@ -1205,25 +1305,37 @@ export class SalesService {
       if (!prevCard) docs.push(cardDoc);
     }
 
+    if (dto.inePdf?.dataBase64) {
+      const prevIne = docs.find((d) => d.kind === DocumentKind.INE);
+      const ineDoc = prevIne ?? new SaleDocument();
+      ineDoc.kind = DocumentKind.INE;
+      ineDoc.name = dto.inePdf.name || `${sale.id}-INE-AmbosLados.pdf`;
+      ineDoc.mime = dto.inePdf.mime || 'application/pdf';
+      ineDoc.dataBase64 = dto.inePdf.dataBase64;
+      ineDoc.driveFileId = null;
+      ineDoc.driveFileUrl = null;
+      if (!prevIne) docs.push(ineDoc);
+    }
+
     const docAtt = (kind: DocumentKind) => {
       const d = docs.find((x) => x.kind === kind);
       if (!d?.dataBase64) return null;
       return { name: d.name, mime: d.mime, dataBase64: d.dataBase64 };
     };
     const documentosPayload: Record<string, unknown> = {
-      ine: docAtt(DocumentKind.INE),
       comprobanteDomicilio: docAtt(DocumentKind.COMPROBANTE),
       constanciaSituacionFiscal: docAtt(DocumentKind.CONSTANCIA_FISCAL),
       tarjetaFrente: docAtt(DocumentKind.TARJETA_FRENTE),
       tarjetaReverso: docAtt(DocumentKind.TARJETA_REVERSO),
       tarjetaPdf: docAtt(DocumentKind.TARJETA),
+      reciboNomina: docAtt(DocumentKind.RECIBO_NOMINA),
+      domiciliacionBanorte: docAtt(DocumentKind.BANORTE_DOM),
       ticketPago: docAtt(DocumentKind.TICKET_PAGO),
       comprobanteTransferencia: docAtt(DocumentKind.COMP_TRANSFERENCIA),
       firmaCliente: dto.firmaCliente,
     };
 
     const driveKeyToKind: Record<string, DocumentKind> = {
-      ine: DocumentKind.INE,
       comprobanteDomicilio: DocumentKind.COMPROBANTE,
       constanciaSituacionFiscal: DocumentKind.CONSTANCIA_FISCAL,
       ticketPago: DocumentKind.TICKET_PAGO,
@@ -1232,9 +1344,15 @@ export class SalesService {
       caratulaPdf: DocumentKind.CARATULA,
       cartaFacturaPdf: DocumentKind.CARTA_FACTURA,
       cartaNoFacturaPdf: DocumentKind.CARTA_NO_FACTURA,
+      cartaExclusionesPdf: DocumentKind.CARTA_EXCLUSIONES,
       reglamentoParquePdf: DocumentKind.REGLAMENTO_PARQUE,
+      reglamentoParqueFolletoPdf: DocumentKind.REGLAMENTO_FOLLETO,
       cartaAutorizacionPdf: DocumentKind.CARTA_AUTORIZACION,
+      cartaNominaPdf: DocumentKind.CARTA_NOMINA,
+      reciboNomina: DocumentKind.RECIBO_NOMINA,
+      domiciliacionBanorte: DocumentKind.BANORTE_DOM,
       tarjetaPdf: DocumentKind.TARJETA,
+      inePdf: DocumentKind.INE,
     };
 
     if (this.googleDrive.isEnabled()) {
@@ -1248,9 +1366,13 @@ export class SalesService {
           caratulaPdf: dto.caratulaPdf ?? null,
           cartaFacturaPdf: dto.cartaFacturaPdf ?? null,
           cartaNoFacturaPdf: dto.cartaNoFacturaPdf ?? null,
+          cartaExclusionesPdf: dto.cartaExclusionesPdf ?? null,
           reglamentoParquePdf: dto.reglamentoParquePdf ?? null,
+          reglamentoParqueFolletoPdf: dto.reglamentoParqueFolletoPdf ?? null,
           cartaAutorizacionPdf: dto.cartaAutorizacionPdf ?? null,
+          cartaNominaPdf: dto.cartaNominaPdf ?? null,
           tarjetaPdf: dto.tarjetaPdf ?? docAtt(DocumentKind.TARJETA),
+          inePdf: dto.inePdf ?? docAtt(DocumentKind.INE),
         });
         if (!driveInfo) {
           throw new Error('Drive no devolvió carpeta de venta');
@@ -1268,9 +1390,13 @@ export class SalesService {
               kind === DocumentKind.CARATULA ||
               kind === DocumentKind.CARTA_FACTURA ||
               kind === DocumentKind.CARTA_NO_FACTURA ||
+              kind === DocumentKind.CARTA_EXCLUSIONES ||
               kind === DocumentKind.REGLAMENTO_PARQUE ||
+              kind === DocumentKind.REGLAMENTO_FOLLETO ||
               kind === DocumentKind.CARTA_AUTORIZACION ||
-              kind === DocumentKind.TARJETA
+              kind === DocumentKind.CARTA_NOMINA ||
+              kind === DocumentKind.TARJETA ||
+              kind === DocumentKind.INE
                 ? 'application/pdf'
                 : 'application/octet-stream';
             docs.push(doc);
@@ -1291,6 +1417,8 @@ export class SalesService {
         for (const side of [
           DocumentKind.TARJETA_FRENTE,
           DocumentKind.TARJETA_REVERSO,
+          DocumentKind.INE_FRENTE,
+          DocumentKind.INE_REVERSO,
         ]) {
           const sideDoc = docs.find((d) => d.kind === side);
           if (sideDoc) sideDoc.dataBase64 = null;
