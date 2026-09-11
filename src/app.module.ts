@@ -33,7 +33,7 @@ import { TruncatingTypeOrmLogger } from './database/truncating-typeorm.logger';
       isGlobal: true,
       envFilePath: '.env',
     }),
-    TypeOrmModule.forRootAsync({
+    TypeOrmModule.forRootAsync({ 
       imports: [ConfigModule],
       inject: [ConfigService],
       useFactory: (config: ConfigService) => ({
